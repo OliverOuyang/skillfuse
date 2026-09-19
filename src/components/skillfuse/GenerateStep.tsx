@@ -168,7 +168,7 @@ export function GenerateStep({
           onClick={onNext}
           className="flex items-center gap-2 rounded-lg bg-primary px-6 py-3 text-[14px] font-semibold text-white shadow-sm hover:bg-primary/90"
         >
-          Test the scorers <ArrowLeft className="h-4 w-4" />
+          Test the scorers <ArrowRight className="h-4 w-4" />
         </button>
       </div>
     </div>
