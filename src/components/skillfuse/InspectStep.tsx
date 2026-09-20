@@ -16,23 +16,23 @@ export function InspectStep({
   return (
     <div>
       <StepHeading
-        kicker="Step 2 · Inspect"
+        kicker="第 2 步 · 检查"
         title={analysis.displayName}
-        sub={analysis.description || "No description found in frontmatter — the generator will lean on section structure."}
+        sub={analysis.description || "frontmatter 中没有找到描述——生成器将更多依赖章节结构进行推断。"}
       />
 
       {/* stat row */}
       <div className="mb-7 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Stat label="Sections" value={skill.sections.length} />
-        <Stat label="Constraints" value={analysis.constraints.length} />
-        <Stat label="Workflow steps" value={analysis.steps.length} />
-        <Stat label="Examples" value={analysis.examples.length} />
+        <Stat label="章节" value={skill.sections.length} />
+        <Stat label="硬约束" value={analysis.constraints.length} />
+        <Stat label="工作流步骤" value={analysis.steps.length} />
+        <Stat label="示例" value={analysis.examples.length} />
       </div>
 
       {analysis.warnings.length > 0 && (
         <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4">
           <p className="mb-1.5 flex items-center gap-1.5 text-[12.5px] font-semibold text-amber-800">
-            <AlertTriangle className="h-3.5 w-3.5" /> Things to know
+            <AlertTriangle className="h-3.5 w-3.5" /> 需要注意
           </p>
           <ul className="space-y-1">
             {analysis.warnings.map((w) => (
@@ -43,18 +43,18 @@ export function InspectStep({
       )}
 
       <div className="grid gap-4 md:grid-cols-2">
-        <Panel title="Detected output formats" items={analysis.formats} empty="No explicit formats detected" mono />
-        <Panel title="Inputs the skill expects" items={analysis.inputs} empty="No input kinds detected" />
-        <Panel title="Hard constraints (must / never)" items={analysis.constraints} empty="None detected" />
-        <Panel title="Quality criteria" items={analysis.qualityCriteria} empty="None detected" />
-        <Panel title="Workflow" items={analysis.steps} numbered empty="No numbered workflow found" />
-        <Panel title="Tools & references" items={analysis.tools} empty="None detected" mono />
+        <Panel title="检测到的输出格式" items={analysis.formats} empty="未检测到明确的输出格式" mono />
+        <Panel title="skill 预期的输入" items={analysis.inputs} empty="未检测到输入类型" />
+        <Panel title="硬约束（必须 / 禁止）" items={analysis.constraints} empty="未检测到" />
+        <Panel title="质量标准" items={analysis.qualityCriteria} empty="未检测到" />
+        <Panel title="工作流程" items={analysis.steps} numbered empty="未找到编号工作流" />
+        <Panel title="工具与引用" items={analysis.tools} empty="未检测到" mono />
       </div>
 
       {analysis.triggerKeywords.length > 0 && (
         <div className="mt-4 rounded-lg border bg-white p-4">
           <p className="mb-2 font-code text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-            Trigger keywords
+            触发关键词
           </p>
           <div className="flex flex-wrap gap-1.5">
             {analysis.triggerKeywords.map((t) => (
@@ -68,13 +68,13 @@ export function InspectStep({
 
       <div className="mt-8 flex items-center gap-3">
         <button onClick={onBack} className="flex items-center gap-1.5 rounded-lg border bg-white px-4 py-2.5 text-[13px] font-medium hover:bg-muted">
-          <ArrowLeft className="h-4 w-4" /> Back
+          <ArrowLeft className="h-4 w-4" /> 上一步
         </button>
         <button
           onClick={onNext}
           className="flex items-center gap-2 rounded-lg bg-primary px-6 py-3 text-[14px] font-semibold text-white shadow-sm hover:bg-primary/90"
         >
-          Generate dataset & scorers <ArrowRight className="h-4 w-4" />
+          生成数据集与评分器 <ArrowRight className="h-4 w-4" />
         </button>
       </div>
     </div>
