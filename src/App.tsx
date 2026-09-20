@@ -1,7 +1,8 @@
 import { useCallback, useState } from "react";
-import type { Artifacts, DatasetItem, ModelConfig, ParsedSkill, SkillAnalysis } from "@/core/types";
+import type { Artifacts, DatasetItem, ModelConfig, ParsedSkill, SkillAnalysis, ValidationReport } from "@/core/types";
 import { parseSkill } from "@/core/parseSkill";
 import { analyzeSkill } from "@/core/analyze";
+import { validateSkillPackage } from "@/core/validate";
 import { generateArtifacts } from "@/core/generate";
 import { OutputPlan, StepRail, TopNav } from "@/components/skillfuse/chrome";
 import { ImportStep, type ImportedSkill } from "@/components/skillfuse/ImportStep";
@@ -15,6 +16,7 @@ export default function App() {
   const [maxReached, setMaxReached] = useState(1);
   const [skill, setSkill] = useState<ParsedSkill | null>(null);
   const [analysis, setAnalysis] = useState<SkillAnalysis | null>(null);
+  const [report, setReport] = useState<ValidationReport | null>(null);
   const [artifacts, setArtifacts] = useState<Artifacts | null>(null);
   const [modelCfg, setModelCfg] = useState<ModelConfig | null>(() => loadModelConfig());
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -25,9 +27,10 @@ export default function App() {
   };
 
   const handleAnalyze = useCallback((imported: ImportedSkill) => {
-    const parsed = parseSkill(imported.markdown, imported.sourceName);
+    const parsed = parseSkill(imported.pkg.skillMd.content, imported.pkg.skillMd.path);
     setSkill(parsed);
     setAnalysis(analyzeSkill(parsed));
+    setReport(validateSkillPackage(imported.pkg, parsed));
     setArtifacts(null);
     goTo(2);
   }, []);
@@ -53,6 +56,7 @@ export default function App() {
   const restart = () => {
     setSkill(null);
     setAnalysis(null);
+    setReport(null);
     setArtifacts(null);
     setStep(1);
     setMaxReached(1);
@@ -67,7 +71,7 @@ export default function App() {
           <div className="mx-auto max-w-[860px]">
             {step === 1 && <ImportStep onAnalyze={handleAnalyze} />}
             {step === 2 && skill && analysis && (
-              <InspectStep skill={skill} analysis={analysis} onBack={() => setStep(1)} onNext={handleGenerate} />
+              <InspectStep skill={skill} analysis={analysis} report={report} onBack={() => setStep(1)} onNext={handleGenerate} />
             )}
             {step === 3 && analysis && artifacts && (
               <GenerateStep
