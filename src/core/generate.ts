@@ -207,6 +207,14 @@ function inferTaskTypes(a: SkillAnalysis): string[] {
 /* rule checks                                                         */
 /* ------------------------------------------------------------------ */
 
+/** 交付物是策略 / 分析报告——这类 skill 需要额外检查结论的可追溯性。 */
+export function isReportDeliverable(a: SkillAnalysis): boolean {
+  if (a.formats.includes("report")) return true;
+  return /报告|策略|分析|洞察|复盘|诊断|report|analysis|insight|strategy/i.test(
+    `${a.description} ${a.displayName} ${a.outputSections.join(" ")}`,
+  );
+}
+
 export function buildRuleChecks(a: SkillAnalysis): RuleCheck[] {
   const rules: RuleCheck[] = [
     {
@@ -299,6 +307,57 @@ export function buildRuleChecks(a: SkillAnalysis): RuleCheck[] {
       weight: 2,
       source: "skill 约束：禁止 emoji",
     });
+  }
+
+  // 策略 / 分析报告类交付物：检查的是结论能不能被追溯，而不只是格式
+  if (isReportDeliverable(a)) {
+    rules.push(
+      {
+        id: "report_conclusion_first",
+        name: "结论先行",
+        description: "开头就给出结论 / 摘要，而不是先铺陈过程。",
+        kind: "contains_any",
+        params: { terms: ["结论", "摘要", "核心发现", "TL;DR", "Executive Summary", "一句话"], min_match: 1 },
+        weight: 2,
+        source: "报告类专项",
+      },
+      {
+        id: "report_evidence",
+        name: "结论带数据出处",
+        description: "结论标注了数据来源 / 口径，可被追溯核对。",
+        kind: "contains_any",
+        params: { terms: ["数据来源", "口径", "来源", "取数", "样本", "统计自"], min_match: 1 },
+        weight: 3,
+        source: "报告类专项",
+      },
+      {
+        id: "report_time_window",
+        name: "声明时间范围",
+        description: "写清统计时间范围或对比基准（同比 / 环比 / 截至）。",
+        kind: "contains_any",
+        params: { terms: ["时间范围", "统计周期", "同比", "环比", "截至", "至今", "近 7 天", "近 30 天"], min_match: 1 },
+        weight: 2,
+        source: "报告类专项",
+      },
+      {
+        id: "report_recommendation",
+        name: "给出可执行建议",
+        description: "包含「建议 / 下一步 / 行动项」，不是只描述现象。",
+        kind: "contains_any",
+        params: { terms: ["建议", "下一步", "行动项", "落地", "优化方向"], min_match: 1 },
+        weight: 3,
+        source: "报告类专项",
+      },
+      {
+        id: "report_no_empty_talk",
+        name: "不说正确的废话",
+        description: "不出现「持续关注 / 有待观察」这类没有动作的空泛结论。",
+        kind: "not_contains",
+        params: { terms: ["持续关注", "有待观察", "进一步观察", "仅供参考", "众所周知"] },
+        weight: 2,
+        source: "报告类专项",
+      },
+    );
   }
 
   // required sections — prefer concrete output fields over section headings

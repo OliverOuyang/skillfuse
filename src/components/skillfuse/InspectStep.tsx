@@ -29,9 +29,11 @@ import { cn } from "@/lib/utils";
 
 const CATEGORY_META: { key: IssueCategory; label: string; desc: string }[] = [
   { key: "structure", label: "目录结构", desc: "SKILL.md / scripts / references / tests 的组织方式" },
+  { key: "naming", label: "命名规范", desc: "skill 名、文件名与脚本名的可读性与可移植性" },
   { key: "frontmatter", label: "frontmatter", desc: "name、description、allowed-tools 等元数据" },
   { key: "body", label: "正文结构", desc: "何时使用 / 工作流 / 失败回退 / 边界" },
   { key: "io", label: "输入输出", desc: "输入校验与输出格式的字段级定义" },
+  { key: "report", label: "报告类专项", desc: "结论先行、数据出处、口径与建议（仅报告类 skill）" },
   { key: "trace", label: "trace 规范", desc: "中间步骤埋点与可观测性" },
   { key: "security", label: "安全基线", desc: "提示注入、外部链接与权限面" },
 ];
@@ -304,8 +306,9 @@ function ScoreCard({
         </div>
       </div>
 
-      <div className="mt-5 grid grid-cols-2 gap-2 border-t pt-4 sm:grid-cols-3 lg:grid-cols-6">
-        {CATEGORY_META.map(({ key, label, desc }) => {
+      <div className="mt-5 grid grid-cols-2 gap-2 border-t pt-4 sm:grid-cols-3 lg:grid-cols-4">
+        {/* 专项分类（如报告类）对不适用的 skill 没有规则，不展示空卡片 */}
+        {CATEGORY_META.filter(({ key }) => report.byCategory[key].total > 0).map(({ key, label, desc }) => {
           const s = report.byCategory[key];
           const state = s.errors > 0 ? "danger" : s.warnings > 0 ? "warning" : s.infos > 0 ? "info" : "ok";
           const selected = category === key;

@@ -22,9 +22,11 @@ export type IssueSeverity = "error" | "warning" | "info";
 
 export type IssueCategory =
   | "structure" // 目录结构
+  | "naming" // 命名规范（skill 名、文件名、脚本名）
   | "frontmatter" // frontmatter 字段
   | "body" // 正文七段式
   | "io" // 输入输出规范
+  | "report" // 策略/分析报告类 skill 专项（仅对该类 skill 生效）
   | "trace" // trace / 可观测性
   | "security"; // 安全基线
 

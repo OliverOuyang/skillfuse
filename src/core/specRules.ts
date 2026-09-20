@@ -28,6 +28,8 @@ export interface SpecRule {
   name: string;
   /** 违规时给出的可执行修复建议（展示在检查页的「怎么修」里） */
   fix: string;
+  /** 仅对部分 skill 生效的规则（如策略报告专项）；返回 false 时该规则不计入总数 */
+  applies?(ctx: RuleContext): boolean;
   check(ctx: RuleContext): RuleHit | null;
 }
 
@@ -67,6 +69,21 @@ const KNOWN_TOP_LEVEL = new Set([
   ".gitignore",
   ".claude",
 ]);
+
+/** 交付物是策略 / 分析报告的 skill——这类 skill 的检查重点不是格式，而是结论能不能被追溯。 */
+export function isReportSkill(ctx: RuleContext): boolean {
+  const desc = `${ctx.parsed.description} ${ctx.parsed.frontmatter.name ?? ""}`;
+  const headings = ctx.parsed.sections.map((s) => s.heading).join(" ");
+  return /报告|策略|分析|洞察|复盘|诊断|建议|report|analysis|insight|strategy|recommendation/i.test(
+    `${desc} ${headings}`,
+  );
+}
+
+/** 正文里是否出现某类语义（用于报告专项的「有没有写清楚」类检查）。 */
+const bodyHas = (ctx: RuleContext, re: RegExp) => re.test(ctx.pkg.skillMd.content);
+
+/** 文件名（不含目录）。 */
+const baseName = (p: string) => p.split("/").pop() ?? p;
 
 const SPAN_PATTERNS =
   /skill\.(activate|load|run_script)|tool\.execute|guardrail\.check|human\.review|gen_ai\.skill\.|otel|opentelemetry/i;
@@ -143,6 +160,173 @@ export const SPEC_RULES: SpecRule[] = [
         return { message: `顶层存在规范未定义的项：${unknown.join("、")}。规范目录结构为 SKILL.md / scripts/ / references/ / assets/ / tests/` };
       }
       return null;
+    },
+  },
+
+  /* ===== naming ===== */
+  {
+    id: "naming.skill-kebab-case",
+    category: "naming",
+    severity: "warning",
+    name: "skill 名用 kebab-case",
+    fix:
+      "把 name 改成全小写、用连字符分词的短名，例如 production-data、weekly-report-writer；不要用下划线、驼峰、空格或中文。",
+    check(ctx) {
+      const name = ctx.parsed.name;
+      if (!name) return null;
+      if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)) {
+        return { message: `name「${name}」不符合 kebab-case（全小写 + 连字符）。` };
+      }
+      return null;
+    },
+  },
+  {
+    id: "naming.skill-name-shape",
+    category: "naming",
+    severity: "info",
+    name: "skill 名是「领域-动作」短名",
+    fix:
+      "用 2–4 个词描述「对什么做什么」，如 sales-weekly-report、csv-data-cleaner；避免 helper、tool、my-skill 这类没有信息量的词，也不要长到像一句话。",
+    check(ctx) {
+      const name = ctx.parsed.name;
+      if (!name) return null;
+      const words = name.split("-").filter(Boolean);
+      if (words.length > 5 || name.length > 40) {
+        return { message: `name「${name}」过长（${words.length} 个词 / ${name.length} 字符），建议收敛到 2–4 个词。` };
+      }
+      if (words.length < 2) {
+        return { message: `name「${name}」只有一个词，看不出它对什么做什么，建议补成「领域-动作」。` };
+      }
+      if (/^(my|test|demo|temp|new)-|-(helper|tool|util|utils|skill)$/.test(name)) {
+        return { message: `name「${name}」包含占位或泛化词（my/test/demo/helper/tool/util/skill），表达不了具体职责。` };
+      }
+      return null;
+    },
+  },
+  {
+    id: "naming.file-portable",
+    category: "naming",
+    severity: "warning",
+    name: "文件名可移植",
+    fix:
+      "文件名只用小写字母、数字、连字符或下划线：空格与中文在跨平台同步、CI 和 shell 里都容易出问题，重命名后同步更新正文中的引用路径。",
+    check(ctx) {
+      if (ctx.pkg.files.length <= 1) return null;
+      const bad = ctx.pkg.files
+        .map((f) => f.path)
+        .filter((p) => /[\s]|[一-鿿]|[A-Z]/.test(baseName(p)) && baseName(p) !== "SKILL.md" && baseName(p) !== "README.md" && baseName(p) !== "LICENSE" && baseName(p) !== "CHANGELOG.md");
+      if (bad.length > 0) {
+        return { message: `以下文件名包含空格、中文或大写字母：${bad.slice(0, 5).join("、")}${bad.length > 5 ? ` 等 ${bad.length} 个` : ""}。` };
+      }
+      return null;
+    },
+  },
+  {
+    id: "naming.script-snake-case",
+    category: "naming",
+    severity: "info",
+    name: "脚本名用 snake_case",
+    fix: "scripts/ 下的可执行脚本统一用 snake_case（如 fetch_orders.py），与 Python / shell 生态惯例一致。",
+    check(ctx) {
+      const bad = scripts(ctx)
+        .map((f) => baseName(f.path))
+        .filter((n) => /\.(py|sh)$/.test(n) && !/^[a-z0-9]+(_[a-z0-9]+)*\.(py|sh)$/.test(n));
+      if (bad.length > 0) return { message: `scripts/ 下这些脚本不是 snake_case：${bad.join("、")}。` };
+      return null;
+    },
+  },
+  {
+    id: "naming.no-version-in-filename",
+    category: "naming",
+    severity: "info",
+    name: "文件名不带版本 / 状态后缀",
+    fix:
+      "把 v2、final、new、copy、备份 这类后缀从文件名里去掉——版本交给 git 与 CHANGELOG.md，文件名只表达职责。",
+    check(ctx) {
+      if (ctx.pkg.files.length <= 1) return null;
+      const bad = ctx.pkg.files
+        .map((f) => baseName(f.path))
+        .filter((n) => /([_\-.]|^)(v\d+(\.\d+)*|final|new|old|copy|bak|backup|测试|备份|最终|副本)([_\-.]|$)/i.test(n.replace(/\.[a-z0-9]+$/i, "")));
+      if (bad.length > 0) return { message: `以下文件名带版本或状态后缀：${bad.slice(0, 5).join("、")}。` };
+      return null;
+    },
+  },
+
+  /* ===== 策略 / 分析报告类 skill 专项 ===== */
+  {
+    id: "report.conclusion-first",
+    category: "report",
+    severity: "warning",
+    name: "结论先行",
+    applies: isReportSkill,
+    fix:
+      "在输出格式章节里写死第一段是结论：先给判断与量级，再给论据。否则模型会先铺陈过程，读者要翻到最后才知道结论。",
+    check(ctx) {
+      if (bodyHas(ctx, /结论先行|先给结论|摘要|executive summary|tl;?dr|关键结论|核心结论/i)) return null;
+      return { message: "没有要求「结论先行」。报告类 skill 应在输出格式里规定开头就是结论 / 摘要。" };
+    },
+  },
+  {
+    id: "report.evidence-required",
+    category: "report",
+    severity: "error",
+    name: "结论必须带数据出处",
+    applies: isReportSkill,
+    fix:
+      "写明每个结论要附数据来源（表名 / 查询 / 口径 / 时间范围），并规定「拿不到数据时写明缺口，不得估算」——这是报告类 skill 最容易出幻觉的地方。",
+    check(ctx) {
+      if (bodyHas(ctx, /数据来源|出处|口径|引用|依据|来源标注|source|provenance|不得编造|不要编造|禁止臆测|不得臆造/i)) return null;
+      return { message: "没有要求结论标注数据来源或口径，模型可以自由编造数字而不被发现。" };
+    },
+  },
+  {
+    id: "report.time-window",
+    category: "report",
+    severity: "warning",
+    name: "时间范围与口径写清楚",
+    applies: isReportSkill,
+    fix: "规定报告必须声明统计时间范围与指标口径（同比 / 环比 / 分区 / 去重规则），否则同一句结论换个时间窗就不成立。",
+    check(ctx) {
+      if (bodyHas(ctx, /时间范围|统计周期|时间窗|同比|环比|bizdate|分区|截止日期|date range/i)) return null;
+      return { message: "没有要求声明统计时间范围 / 指标口径。" };
+    },
+  },
+  {
+    id: "report.actionable-recommendation",
+    category: "report",
+    severity: "warning",
+    name: "给出可执行建议",
+    applies: isReportSkill,
+    fix:
+      "在输出结构里加一节「建议 / 下一步」，并要求每条建议可执行（谁做、做什么、预期影响），避免「建议持续关注」这类空话。",
+    check(ctx) {
+      if (bodyHas(ctx, /建议|下一步|行动项|action item|recommendation|next step|落地动作/i)) return null;
+      return { message: "输出结构里没有「建议 / 下一步」，报告只描述现象不给动作。" };
+    },
+  },
+  {
+    id: "report.uncertainty-disclosure",
+    category: "report",
+    severity: "info",
+    name: "标注不确定性与局限",
+    applies: isReportSkill,
+    fix:
+      "要求写明样本量不足、口径变更、数据延迟等局限，并在结论里区分「已验证」和「假设」——评审时这一条最能区分专业报告和话术。",
+    check(ctx) {
+      if (bodyHas(ctx, /局限|不确定|假设|置信|样本量|数据延迟|caveat|limitation|assumption/i)) return null;
+      return { message: "没有要求标注不确定性 / 局限 / 假设。" };
+    },
+  },
+  {
+    id: "report.audience-declared",
+    category: "report",
+    severity: "info",
+    name: "声明读者与决策场景",
+    applies: isReportSkill,
+    fix: "在「何时使用」里写清报告给谁看（业务负责人 / 一线运营 / 管理层）以及要支撑什么决策，篇幅与措辞才有判断依据。",
+    check(ctx) {
+      if (bodyHas(ctx, /读者|受众|面向|汇报对象|管理层|决策者|audience|stakeholder/i)) return null;
+      return { message: "没有声明报告读者与决策场景。" };
     },
   },
 
