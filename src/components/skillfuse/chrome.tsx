@@ -17,7 +17,7 @@ export function Logo() {
       </svg>
       <span className="text-[17px] font-bold tracking-tight text-foreground">SkillFuse</span>
       <span className="ml-1 hidden border-l pl-3 text-[13px] text-muted-foreground sm:block">
-        Turn AI skills into measurable impact.
+        把 AI Skill 变成可衡量的效果
       </span>
     </div>
   );
@@ -41,7 +41,7 @@ export function TopNav({ onOpenSettings }: { onOpenSettings: () => void }) {
           onClick={onOpenSettings}
           className="rounded-md px-2.5 py-1.5 transition-colors hover:bg-muted hover:text-foreground"
         >
-          Model settings
+          模型设置
         </button>
         <span className="ml-2 rounded-full bg-primary/10 px-2.5 py-1 font-code text-[11px] font-semibold text-primary">
           v0.1.0
@@ -53,10 +53,10 @@ export function TopNav({ onOpenSettings }: { onOpenSettings: () => void }) {
 
 /* ---------- left step rail ---------- */
 export const STEPS = [
-  { n: 1, title: "Import Skill", sub: "Add your SKILL.md or ZIP" },
-  { n: 2, title: "Inspect", sub: "Review skill metadata" },
-  { n: 3, title: "Generate", sub: "Create datasets and scorers" },
-  { n: 4, title: "Test", sub: "Run and validate" },
+  { n: 1, title: "导入 Skill", sub: "添加 SKILL.md 或 ZIP" },
+  { n: 2, title: "检查解析", sub: "核对 skill 元数据" },
+  { n: 3, title: "生成", sub: "生成数据集与评分器" },
+  { n: 4, title: "测试", sub: "试运行与验证" },
 ];
 
 export function StepRail({ step, onSelect, maxReached }: { step: number; onSelect: (n: number) => void; maxReached: number }) {
@@ -104,14 +104,14 @@ export function StepRail({ step, onSelect, maxReached }: { step: number; onSelec
 
       <div className="space-y-2 text-[12px] text-muted-foreground">
         <p className="font-semibold text-foreground">SkillFuse</p>
-        <p>Open source. Build better AI.</p>
+        <p>开源项目 · 让 AI 更可靠</p>
         <a
           href="https://github.com/OliverOuyang/skillfuse"
           target="_blank"
           rel="noreferrer"
           className="flex items-center gap-1.5 hover:text-foreground"
         >
-          <Github className="h-3.5 w-3.5" /> View on GitHub
+          <Github className="h-3.5 w-3.5" /> 在 GitHub 查看
         </a>
         <p className="pt-2 font-code text-[10.5px]">v0.1.0 · MIT License</p>
       </div>
@@ -123,27 +123,27 @@ export function StepRail({ step, onSelect, maxReached }: { step: number; onSelec
 const PLAN = [
   {
     icon: Database,
-    title: "Dataset schema",
-    desc: "A Langfuse-compatible dataset schema derived from your skill's inputs, tasks and expected outputs.",
-    points: ["Fields and examples", "Metadata (tags, task type, source)", "Ready for langfuse.create_dataset()"],
+    title: "数据集 Schema",
+    desc: "根据 skill 的输入、任务与预期输出，生成兼容 Langfuse 的数据集定义。",
+    points: ["字段与示例", "元数据（标签、任务类型、来源）", "可直接用于 langfuse.create_dataset()"],
   },
   {
     icon: ListChecks,
-    title: "Rule scorers",
-    desc: "Deterministic evaluators for key behaviors and constraints.",
-    points: ["Format and structure checks", "Hard-constraint validation", "Custom rules from your skill"],
+    title: "规则评分器",
+    desc: "针对关键行为与硬性约束的确定性评分器，零依赖、可复现。",
+    points: ["格式与结构检查", "硬约束（必须 / 禁止）校验", "从 skill 中提取的自定义规则"],
   },
   {
     icon: Sparkles,
-    title: "LLM judge",
-    desc: "An LLM-as-a-judge scorer using your skill's rubric and examples.",
-    points: ["Graded criteria from the skill body", "Your own model, any OpenAI-compatible API", "Langfuse-compatible scorer"],
+    title: "LLM 评审",
+    desc: "基于 skill 的质量标准与示例生成的 LLM-as-a-judge 评分器。",
+    points: ["从 skill 正文提取评分细则", "支持你自己的模型，任意 OpenAI 兼容接口", "兼容 Langfuse 评分流程"],
   },
   {
     icon: FileSliders,
-    title: "Langfuse config",
-    desc: "Ready-to-use configuration and helpers to log, evaluate and visualize results in Langfuse.",
-    points: ["Dataset and scorer definitions", "SDK integration snippets", "Environment variable guidance"],
+    title: "Langfuse 配置",
+    desc: "开箱即用的配置与辅助脚本，在 Langfuse 中记录、评分与可视化结果。",
+    points: ["数据集与评分器定义", "SDK 接入示例代码", "环境变量说明"],
   },
 ];
 
@@ -151,14 +151,14 @@ export function OutputPlan({ ready }: { ready: boolean }) {
   return (
     <aside className="hidden w-[318px] shrink-0 overflow-y-auto border-l bg-white px-6 py-6 xl:block">
       <div className="mb-1 flex items-center justify-between">
-        <h2 className="text-[15px] font-bold tracking-tight">Output plan</h2>
+        <h2 className="text-[15px] font-bold tracking-tight">生成清单</h2>
         <span className="flex items-center gap-1.5 text-[11.5px] font-medium text-muted-foreground">
           <span className={cn("h-1.5 w-1.5 rounded-full", ready ? "bg-emerald-500" : "bg-amber-400")} />
-          {ready ? "Ready" : "Waiting for skill"}
+          {ready ? "已就绪" : "等待导入 skill"}
         </span>
       </div>
       <p className="mb-5 text-[12.5px] leading-relaxed text-muted-foreground">
-        Here's what SkillFuse will generate from your skill:
+        SkillFuse 将从你的 skill 生成以下内容：
       </p>
       <div className="space-y-6">
         {PLAN.map((p) => (
