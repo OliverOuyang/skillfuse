@@ -512,7 +512,7 @@ import json
 import os
 import re
 
-from openai import OpenAI
+from openai import BadRequestError, OpenAI
 
 JUDGE_PROMPT = open(os.path.join(os.path.dirname(__file__), "llm_judge_prompt.md"), encoding="utf-8").read()
 
@@ -523,14 +523,22 @@ client = OpenAI(
 MODEL = os.environ.get("JUDGE_MODEL", "gpt-4o-mini")
 
 
+def _complete(prompt: str):
+    kwargs = {"model": MODEL, "messages": [{"role": "user", "content": prompt}], "temperature": 0}
+    try:
+        return client.chat.completions.create(**kwargs)
+    except BadRequestError as exc:
+        # 部分推理型模型（如 kimi-for-coding）只接受默认温度，去掉该参数重试一次
+        if "temperature" not in str(exc).lower():
+            raise
+        kwargs.pop("temperature")
+        return client.chat.completions.create(**kwargs)
+
+
 def judge(input_text: str, output_text: str) -> tuple[str, float, str]:
     """返回 (name, value, comment) — value 取值 [0, 1]，可直接用于 langfuse.score(...)。"""
     prompt = JUDGE_PROMPT.replace("{{input}}", input_text or "").replace("{{output}}", output_text or "")
-    resp = client.chat.completions.create(
-        model=MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0,
-    )
+    resp = _complete(prompt)
     raw = resp.choices[0].message.content or ""
     m = re.search(r"\\{[\\s\\S]*\\}", raw)
     try:

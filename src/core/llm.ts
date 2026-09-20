@@ -150,6 +150,12 @@ async function request(
   }
 }
 
+/** 端点是否因为 temperature 参数本身而拒绝了请求。 */
+function rejectsTemperature(err: unknown): boolean {
+  if (!(err instanceof LlmError) || err.status !== 400) return false;
+  return /temperature/i.test(`${err.message} ${err.detail ?? ""}`);
+}
+
 /** Call any OpenAI-compatible chat endpoint (the user's own model included). */
 export async function chatCompletion(
   cfg: ModelConfig,
@@ -163,13 +169,30 @@ export async function chatCompletion(
   };
   if (cfg.maxTokens && cfg.maxTokens > 0) body.max_tokens = cfg.maxTokens;
 
-  const res = await request(cfg, "/chat/completions", { method: "POST", body: JSON.stringify(body) }, opts.signal);
+  const post = (payload: Record<string, unknown>) =>
+    request(cfg, "/chat/completions", { method: "POST", body: JSON.stringify(payload) }, opts.signal);
+
+  let res: Response;
+  try {
+    res = await post(body);
+  } catch (err) {
+    // 部分推理型模型（如 kimi-for-coding）只接受默认温度，去掉该参数重试一次
+    if (!rejectsTemperature(err)) throw err;
+    const withoutTemperature = { ...body };
+    delete withoutTemperature.temperature;
+    res = await post(withoutTemperature);
+  }
   const data = await res.json().catch(() => null);
   const content = data?.choices?.[0]?.message?.content;
   if (typeof content !== "string") {
     throw new LlmError("bad_response", "端点返回的结构不是 OpenAI 兼容格式", {
       hint: "确认 Base URL 指向的是 OpenAI 兼容接口（通常以 /v1 结尾）。",
       detail: JSON.stringify(data).slice(0, 300),
+    });
+  }
+  if (!content.trim() && data?.choices?.[0]?.finish_reason === "length") {
+    throw new LlmError("bad_response", "输出预算用尽，模型没有返回正文", {
+      hint: "推理型模型会先消耗一部分 token 在思维链上。请在模型设置里调大「最大输出 token」。",
     });
   }
   return content;
@@ -186,7 +209,9 @@ export interface ConnectionResult {
 export async function testConnection(cfg: ModelConfig, signal?: AbortSignal): Promise<ConnectionResult> {
   const started = performance.now();
   const reply = await chatCompletion(
-    { ...cfg, maxTokens: Math.min(cfg.maxTokens || 32, 32), timeoutMs: cfg.timeoutMs ?? 20_000 },
+    // 推理型模型（kimi-for-coding、o 系列等）会先花掉一部分预算在思维链上，
+    // 预算给太小会拿到空回声，所以这里留 256。
+    { ...cfg, maxTokens: Math.min(cfg.maxTokens || 256, 256), timeoutMs: cfg.timeoutMs ?? 20_000 },
     "只回复两个字：连通",
     { signal, temperature: 0 },
   );

@@ -4,3 +4,5 @@ skillfuse-out/
 *.local
 .DS_Store
 .env
+.venv/
+out-*/
