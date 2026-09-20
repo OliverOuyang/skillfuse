@@ -1,4 +1,5 @@
 import type { DatasetItem, ModelConfig, SkillAnalysis } from "./types";
+import { LLM_PROXY_HEADER, LLM_PROXY_PATH, LLM_TARGET_HEADER } from "./llmProxy";
 
 const DEFAULT_TIMEOUT = 60_000;
 
@@ -13,6 +14,7 @@ export class LlmError extends Error {
     | "rate_limit"
     | "server"
     | "bad_response"
+    | "proxy_unavailable"
     | "unknown";
   readonly status?: number;
   readonly hint?: string;
@@ -63,19 +65,42 @@ function statusError(status: number, body: string): LlmError {
   return new LlmError("unknown", `请求失败（HTTP ${status}）`, { status, detail });
 }
 
-function transportError(err: unknown, timedOut: boolean): LlmError {
+function transportError(err: unknown, timedOut: boolean, viaProxy: boolean): LlmError {
   if (timedOut) {
     return new LlmError("timeout", "请求超时", {
       hint: "可在模型设置里调大超时时间，或换一个更快的模型。",
     });
   }
-  return new LlmError("cors", "无法连接到该端点（网络或跨域被拦截）", {
-    hint: "浏览器直连需要端点允许跨域（CORS）。本地服务请放开跨域；若厂商不支持浏览器直连，可改用 CLI 生成评测包。",
+  if (viaProxy) {
+    return new LlmError("network", "本地代理没有响应", {
+      hint: "确认页面是通过 npm run dev / npm run preview 打开的；纯静态部署下没有本地代理。",
+      detail: err instanceof Error ? err.message : String(err),
+    });
+  }
+  return new LlmError("cors", "无法连接到该端点（浏览器跨域被拦截或网络不通）", {
+    hint: "多数厂商端点（Kimi、DeepSeek、通义等）不向浏览器放行跨域。请在模型设置里开启「本地代理转发」，由本机转发请求。",
     detail: err instanceof Error ? err.message : String(err),
   });
 }
 
-/** 统一的 fetch 封装：超时中止 + 错误归类。 */
+/** 代理转发时，上游错误由本机中转层包装成 { error: { proxy: true, message } }。 */
+async function proxyError(res: Response): Promise<LlmError | null> {
+  const body = await res.clone().text().catch(() => "");
+  try {
+    const data = JSON.parse(body);
+    if (data?.error?.proxy) {
+      return new LlmError("network", String(data.error.message), {
+        status: res.status,
+        hint: "本机也连不上该地址时，先确认网络可达、地址拼写正确（多数端点以 /v1 结尾）。",
+      });
+    }
+  } catch {
+    /* 上游原样返回的错误交给 statusError 处理 */
+  }
+  return null;
+}
+
+/** 统一的 fetch 封装：超时中止 + 可选本地代理 + 错误归类。 */
 async function request(
   cfg: ModelConfig,
   path: string,
@@ -91,20 +116,34 @@ async function request(
   const onExternalAbort = () => controller.abort();
   signal?.addEventListener("abort", onExternalAbort);
 
+  const viaProxy = cfg.useProxy === true;
+  const target = `${trimBase(cfg.baseUrl)}${path}`;
+
   try {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (cfg.apiKey.trim()) headers.Authorization = `Bearer ${cfg.apiKey.trim()}`;
-    const res = await fetch(`${trimBase(cfg.baseUrl)}${path}`, {
+    if (viaProxy) headers[LLM_TARGET_HEADER] = target;
+
+    const res = await fetch(viaProxy ? `${LLM_PROXY_PATH}${path}` : target, {
       ...init,
       headers: { ...headers, ...(init.headers as Record<string, string> | undefined) },
       signal: controller.signal,
     });
-    if (!res.ok) throw statusError(res.status, await res.text().catch(() => ""));
+
+    // 静态部署下没有中转路径，返回的会是 index.html 或 404——据此给出明确提示
+    if (viaProxy && res.headers.get(LLM_PROXY_HEADER) !== "1") {
+      throw new LlmError("proxy_unavailable", "当前页面没有本地代理", {
+        hint: "本地代理只在 npm run dev / npm run preview 下可用。在线预览请关掉「本地代理转发」直连（需端点支持跨域），或在本机运行。",
+      });
+    }
+    if (!res.ok) {
+      throw (viaProxy ? await proxyError(res) : null) ?? statusError(res.status, await res.text().catch(() => ""));
+    }
     return res;
   } catch (err) {
     if (err instanceof LlmError) throw err;
     if (signal?.aborted) throw new LlmError("network", "请求已取消");
-    throw transportError(err, timedOut);
+    throw transportError(err, timedOut, viaProxy);
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener("abort", onExternalAbort);
@@ -217,6 +256,24 @@ Return a JSON array only, each element:
   }));
 }
 
+/** 评审 rubric 的四个维度，与 llm_judge_prompt.md 中的字段一一对应。 */
+export const JUDGE_DIMENSIONS = [
+  { key: "task_completion", label: "任务完成度" },
+  { key: "instruction_adherence", label: "指令遵循度" },
+  { key: "quality", label: "质量标准" },
+  { key: "format_compliance", label: "格式合规性" },
+] as const;
+
+export interface JudgeResult {
+  score: number;
+  reasoning: string;
+  /** 各维度 1–5 分，模型未给出时为 undefined */
+  dimensions: Record<string, number | undefined>;
+  constraintViolation: boolean;
+  parsed: boolean;
+  raw: string;
+}
+
 /** Run the generated judge prompt against one input/output pair using the user's model. */
 export async function runJudge(
   cfg: ModelConfig,
@@ -224,19 +281,34 @@ export async function runJudge(
   input: string,
   output: string,
   opts: { signal?: AbortSignal } = {},
-): Promise<{ score: number; reasoning: string; raw: string }> {
+): Promise<JudgeResult> {
   const prompt = judgePrompt.replace("{{input}}", input).replace("{{output}}", output);
   const raw = await chatCompletion(cfg, prompt, { signal: opts.signal, temperature: 0 });
   const match = raw.match(/\{[\s\S]*\}/);
   try {
     const data = JSON.parse(match ? match[0] : raw);
+    const dimensions: Record<string, number | undefined> = {};
+    for (const d of JUDGE_DIMENSIONS) {
+      const v = Number(data[d.key]);
+      dimensions[d.key] = Number.isFinite(v) ? Math.max(1, Math.min(5, v)) : undefined;
+    }
     return {
       score: Math.max(0, Math.min(1, Number(data.score ?? 0))),
-      reasoning: String(data.reasoning ?? "").slice(0, 500),
+      reasoning: String(data.reasoning ?? "").slice(0, 800),
+      dimensions,
+      constraintViolation: data.constraint_violation === true,
+      parsed: true,
       raw,
     };
   } catch {
-    return { score: 0, reasoning: "评审结果解析失败（模型未按要求返回 JSON）", raw };
+    return {
+      score: 0,
+      reasoning: "评审结果解析失败：模型没有按 rubric 返回 JSON。可换一个指令跟随更稳的模型，或调低温度重试。",
+      dimensions: {},
+      constraintViolation: false,
+      parsed: false,
+      raw,
+    };
   }
 }
 

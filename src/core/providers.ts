@@ -34,6 +34,15 @@ export const PROVIDERS: ProviderPreset[] = [
     needsKey: true,
   },
   {
+    id: "kimi-coding",
+    label: "Kimi for Coding",
+    baseUrl: "https://api.kimi.com/coding/v1",
+    models: ["kimi-for-coding"],
+    keyUrl: "https://www.kimi.com/coding",
+    needsKey: true,
+    hint: "Kimi for Coding 订阅端点，K2.8 Preview 对应模型名 kimi-for-coding。该端点不向浏览器放行跨域，请开启下方的「本地代理转发」。",
+  },
+  {
     id: "moonshot",
     label: "Moonshot / Kimi",
     baseUrl: "https://api.moonshot.cn/v1",

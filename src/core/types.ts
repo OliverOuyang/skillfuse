@@ -160,6 +160,8 @@ export interface ModelConfig {
   maxTokens?: number;
   /** 请求超时（毫秒），缺省 60000 */
   timeoutMs?: number;
+  /** 经本机 vite 服务中转，用于绕开端点不返回 CORS 头的问题（仅 dev / preview 可用） */
+  useProxy?: boolean;
 }
 
 /** 生成评测包时的可选覆盖项——让用户在界面上调完规则与条目后重新生成。 */

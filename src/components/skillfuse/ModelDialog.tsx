@@ -1,17 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, ExternalLink, Eye, EyeOff, Loader2, RefreshCw, TriangleAlert, Zap } from "lucide-react";
+import { CheckCircle2, ExternalLink, Eye, EyeOff, Loader2, RefreshCw, Shuffle, TriangleAlert, Zap } from "lucide-react";
 import type { ModelConfig } from "@/core/types";
-import { describeError, listModels, testConnection } from "@/core/llm";
+import { LlmError, describeError, listModels, testConnection } from "@/core/llm";
 import { PROVIDERS, findProvider, guessProvider } from "@/core/providers";
 import { DEFAULT_MODEL_CONFIG, clearModelConfig, loadModelConfig, saveModelConfig } from "@/core/modelStore";
-import { Badge, Button, Modal, SectionLabel } from "@/components/ui";
+import { Badge, Button, Modal, SectionLabel, Toggle } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
 type Probe =
   | { status: "idle" }
   | { status: "running" }
   | { status: "ok"; latencyMs: number; reply: string }
-  | { status: "error"; message: string; hint?: string };
+  | { status: "error"; message: string; hint?: string; suggestProxy?: boolean };
 
 /** 仅在打开时挂载（由 App 控制），因此配置可以直接在初始化时读取。 */
 export function ModelDialog({
@@ -66,6 +66,28 @@ export function ModelDialog({
     setProbe({ status: "running" });
     try {
       const r = await testConnection(cfg, ac.signal);
+      setProbe({ status: "ok", latencyMs: r.latencyMs, reply: r.reply });
+    } catch (e) {
+      const d = describeError(e);
+      setProbe({
+        status: "error",
+        message: d.message,
+        hint: d.hint,
+        // 跨域被拦是浏览器直连最常见的失败，直接给一个「开代理再试」的按钮
+        suggestProxy: e instanceof LlmError && e.kind === "cors" && !cfg.useProxy,
+      });
+    }
+  };
+
+  const retryViaProxy = async () => {
+    const next = { ...cfg, useProxy: true };
+    setCfg(next);
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
+    setProbe({ status: "running" });
+    try {
+      const r = await testConnection(next, ac.signal);
       setProbe({ status: "ok", latencyMs: r.latencyMs, reply: r.reply });
     } catch (e) {
       const d = describeError(e);
@@ -154,6 +176,26 @@ export function ModelDialog({
           {provider.hint && <p className="mt-2 text-[11.5px] text-muted-foreground">{provider.hint}</p>}
         </div>
 
+        <div className="flex items-start gap-3 rounded-lg border bg-muted/40 p-3">
+          <div className="pt-0.5">
+            <Toggle
+              checked={cfg.useProxy === true}
+              onChange={(v) => patch({ useProxy: v })}
+              label="本地代理转发"
+            />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="flex items-center gap-1.5 text-[12.5px] font-semibold">
+              <Shuffle className="h-3.5 w-3.5 text-primary" /> 本地代理转发
+            </p>
+            <p className="mt-0.5 text-[11.5px] leading-relaxed text-muted-foreground">
+              由本机的开发服务器代发请求，绕开厂商端点不给浏览器放行跨域的问题（Kimi、DeepSeek、通义等多数端点都需要）。
+              请求仍然只从你自己的机器发出，密钥不经过第三方。仅 <code className="font-code">npm run dev</code> /{" "}
+              <code className="font-code">npm run preview</code> 下可用。
+            </p>
+          </div>
+        </div>
+
         <div className="grid gap-3.5 sm:grid-cols-2">
           <Field label="Base URL" className="sm:col-span-2">
             <input
@@ -161,6 +203,7 @@ export function ModelDialog({
               value={cfg.baseUrl}
               onChange={(e) => patch({ baseUrl: e.target.value })}
               placeholder="https://api.openai.com/v1"
+              aria-label="Base URL"
               spellCheck={false}
             />
           </Field>
@@ -187,6 +230,7 @@ export function ModelDialog({
                 className={cn(inputCls, "pr-10")}
                 value={cfg.apiKey}
                 onChange={(e) => patch({ apiKey: e.target.value })}
+                aria-label="API key"
                 placeholder={provider.needsKey ? "sk-..." : "本地端点通常留空即可"}
                 spellCheck={false}
                 autoComplete="off"
@@ -222,6 +266,7 @@ export function ModelDialog({
               value={cfg.model}
               onChange={(e) => patch({ model: e.target.value })}
               placeholder="gpt-4o-mini / your-model-name"
+              aria-label="模型"
               spellCheck={false}
               list="skillfuse-model-options"
             />
@@ -273,6 +318,7 @@ export function ModelDialog({
                   step={0.1}
                   value={cfg.temperature ?? 0.3}
                   onChange={(e) => patch({ temperature: Number(e.target.value) })}
+                  aria-label="温度"
                   className="w-full accent-[hsl(var(--primary))]"
                 />
               </Field>
@@ -284,6 +330,7 @@ export function ModelDialog({
                   className={inputCls}
                   value={cfg.maxTokens ?? 0}
                   onChange={(e) => patch({ maxTokens: Number(e.target.value) })}
+                  aria-label="最大输出 token"
                 />
               </Field>
               <Field label="超时（秒）">
@@ -292,6 +339,7 @@ export function ModelDialog({
                   min={5}
                   step={5}
                   className={inputCls}
+                  aria-label="超时秒数"
                   value={Math.round((cfg.timeoutMs ?? 60_000) / 1000)}
                   onChange={(e) => patch({ timeoutMs: Math.max(5, Number(e.target.value)) * 1000 })}
                 />
@@ -306,6 +354,9 @@ export function ModelDialog({
             <div className="text-[12.5px]">
               <p className="font-semibold text-emerald-600 dark:text-emerald-400">
                 连接成功 <Badge tone="success" className="ml-1">{probe.latencyMs} ms</Badge>
+                <Badge tone="neutral" className="ml-1">
+                  {cfg.useProxy ? "经本地代理" : "浏览器直连"}
+                </Badge>
               </p>
               <p className="mt-0.5 text-muted-foreground">
                 模型回声：<span className="font-code">{probe.reply || "（空）"}</span>
@@ -319,6 +370,11 @@ export function ModelDialog({
             <div className="text-[12.5px]">
               <p className="font-semibold text-destructive">{probe.message}</p>
               {probe.hint && <p className="mt-0.5 leading-relaxed text-muted-foreground">{probe.hint}</p>}
+              {probe.suggestProxy && (
+                <Button variant="secondary" size="sm" className="mt-2" onClick={retryViaProxy}>
+                  <Shuffle className="h-3.5 w-3.5" /> 开启本地代理并重试
+                </Button>
+              )}
             </div>
           </div>
         )}
@@ -342,12 +398,12 @@ function Field({
   children: React.ReactNode;
 }) {
   return (
-    <label className={cn("block", className)}>
-      <span className="mb-1.5 flex items-center justify-between gap-2">
+    <div className={cn("block", className)}>
+      <div className="mb-1.5 flex items-center justify-between gap-2">
         <SectionLabel>{label}</SectionLabel>
         {aside}
-      </span>
+      </div>
       {children}
-    </label>
+    </div>
   );
 }
