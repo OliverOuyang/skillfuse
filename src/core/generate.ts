@@ -265,7 +265,7 @@ export function buildRuleChecks(a: SkillAnalysis): RuleCheck[] {
     rules.push({
       id: "no_banned_terms",
       name: "遵守硬约束",
-      description: `输出不得包含：${banned.join(", ")}。`,
+      description: `输出不得包含：${banned.join("、")}。`,
       kind: "not_contains",
       params: { terms: banned },
       weight: 3,
