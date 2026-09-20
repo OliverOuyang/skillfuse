@@ -1,15 +1,27 @@
-import { AlertTriangle, ArrowLeft, ArrowRight } from "lucide-react";
-import type { ParsedSkill, SkillAnalysis } from "@/core/types";
+import { AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, Info, XCircle } from "lucide-react";
+import type { IssueCategory, ParsedSkill, SkillAnalysis, ValidationReport } from "@/core/types";
 import { StepHeading } from "./chrome";
+import { cn } from "@/lib/utils";
+
+const CATEGORY_META: { key: IssueCategory; label: string }[] = [
+  { key: "structure", label: "目录结构" },
+  { key: "frontmatter", label: "frontmatter" },
+  { key: "body", label: "正文结构" },
+  { key: "io", label: "输入输出" },
+  { key: "trace", label: "trace 规范" },
+  { key: "security", label: "安全基线" },
+];
 
 export function InspectStep({
   skill,
   analysis,
+  report,
   onBack,
   onNext,
 }: {
   skill: ParsedSkill;
   analysis: SkillAnalysis;
+  report: ValidationReport | null;
   onBack: () => void;
   onNext: () => void;
 }) {
@@ -28,6 +40,8 @@ export function InspectStep({
         <Stat label="工作流步骤" value={analysis.steps.length} />
         <Stat label="示例" value={analysis.examples.length} />
       </div>
+
+      {report && <ValidationPanel report={report} />}
 
       {analysis.warnings.length > 0 && (
         <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4">
@@ -77,6 +91,79 @@ export function InspectStep({
           生成数据集与评分器 <ArrowRight className="h-4 w-4" />
         </button>
       </div>
+    </div>
+  );
+}
+
+function ValidationPanel({ report }: { report: ValidationReport }) {
+  const scoreColor =
+    report.summary.errors > 0 ? "text-red-600" : report.summary.warnings > 0 ? "text-amber-600" : "text-emerald-600";
+
+  return (
+    <div className="mb-6 rounded-lg border bg-white p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="font-code text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          企业级规范检查
+        </p>
+        <p className={cn("text-[22px] font-extrabold tracking-tight", scoreColor)}>
+          {report.score}
+          <span className="text-[12px] font-medium text-muted-foreground"> /100</span>
+        </p>
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+        {CATEGORY_META.map(({ key, label }) => {
+          const catIssues = report.issues.filter((i) => i.category === key);
+          const catErrors = catIssues.filter((i) => i.severity === "error").length;
+          const ok = catIssues.length === 0;
+          return (
+            <div
+              key={key}
+              className={cn(
+                "rounded-md border px-2.5 py-2 text-center",
+                ok ? "border-emerald-200 bg-emerald-50" : catErrors > 0 ? "border-red-200 bg-red-50" : "border-amber-200 bg-amber-50",
+              )}
+            >
+              <p className={cn("text-[12px] font-semibold", ok ? "text-emerald-700" : catErrors > 0 ? "text-red-700" : "text-amber-700")}>
+                {ok ? "✓ " : ""}
+                {label}
+              </p>
+              {!ok && (
+                <p className="mt-0.5 text-[10.5px] text-muted-foreground">
+                  {catErrors > 0 && `${catErrors} error `}
+                  {catIssues.length - catErrors > 0 && `${catIssues.length - catErrors} 提示`}
+                </p>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {report.issues.length > 0 ? (
+        <ul className="mt-3.5 space-y-1.5 border-t pt-3.5">
+          {report.issues.map((issue, i) => (
+            <li key={i} className="flex items-start gap-2 text-[12.5px] leading-snug">
+              {issue.severity === "error" ? (
+                <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-500" />
+              ) : issue.severity === "warning" ? (
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+              ) : (
+                <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
+              )}
+              <span className="text-foreground/90">
+                <span className="mr-1.5 font-code text-[10.5px] text-muted-foreground">
+                  {issue.ruleId}
+                </span>
+                {issue.message}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-3.5 flex items-center gap-1.5 border-t pt-3.5 text-[12.5px] text-emerald-700">
+          <CheckCircle2 className="h-4 w-4" /> 全部规则通过（{report.summary.passed} 条）
+        </p>
+      )}
     </div>
   );
 }

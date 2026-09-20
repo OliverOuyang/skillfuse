@@ -1,5 +1,50 @@
 /** Shared types for the SkillFuse engine (used by both the web app and the CLI). */
 
+/** A single file inside an imported skill package. */
+export interface SkillFile {
+  /** path relative to the package root, e.g. "scripts/build.py" */
+  path: string;
+  content: string;
+  size: number;
+}
+
+/** A whole imported skill package (directory / zip / single file). */
+export interface SkillPackage {
+  /** all files in the package, sorted by path; directories are not included */
+  files: SkillFile[];
+  /** the main SKILL.md document */
+  skillMd: SkillFile;
+  /** where the package came from (directory name / zip name / file name) */
+  sourceName: string;
+}
+
+export type IssueSeverity = "error" | "warning" | "info";
+
+export type IssueCategory =
+  | "structure" // 目录结构
+  | "frontmatter" // frontmatter 字段
+  | "body" // 正文七段式
+  | "io" // 输入输出规范
+  | "trace" // trace / 可观测性
+  | "security"; // 安全基线
+
+export interface ValidationIssue {
+  ruleId: string;
+  severity: IssueSeverity;
+  category: IssueCategory;
+  /** 面向用户的中文说明 */
+  message: string;
+  /** 关联文件路径；缺省表示 SKILL.md */
+  filePath?: string;
+}
+
+export interface ValidationReport {
+  issues: ValidationIssue[];
+  summary: { errors: number; warnings: number; infos: number; passed: number };
+  /** 0..100，按 error/warning 扣分 */
+  score: number;
+}
+
 export interface SkillSection {
   heading: string;
   level: number;
