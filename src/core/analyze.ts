@@ -137,7 +137,7 @@ function extractTriggers(description: string): string[] {
       .replace(/^(trigger\s*)?(keywords?|关键词|关键字)\s*[:：]?\s*/i, "");
     out.push(
       ...capture
-        .split(/[,，、;;"“”']+/)
+        .split(/[,，、;；"“”']+/)
         .map((s) => s.trim())
         .filter((s) => s.length > 1 && s.length < 40),
     );
