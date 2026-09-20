@@ -2,62 +2,62 @@
 export const SAMPLE_SKILL = `---
 name: weekly-report-writer
 description: >
-  Generate a polished weekly team report in Markdown from raw notes, CSV metrics
-  or a project URL. Trigger keywords: 周报, weekly report, status update.
-  Use when the user asks for a weekly summary, 写周报 or a status digest.
+  把零散的会议纪要和指标数据整理成一份规范的团队周报（Markdown 格式）。
+  触发关键词：周报、weekly report、写周报、团队进展总结。
+  当用户要求写周报、汇总本周进展时触发。
 ---
 
-# Weekly Report Writer
+# 周报写作助手
 
-Turn scattered notes and metrics into a consistent weekly report.
+把零散的笔记和指标整理成结构统一的周报。
 
-## Inputs
+## 输入
 
-- Raw meeting notes or bullet fragments (natural language)
-- Optional CSV file with weekly metrics
-- Optional project board URL for context
+- 原始会议纪要或零散的要点（自然语言）
+- 可选的 CSV 每周指标文件
+- 可选的项目看板链接作为上下文
 
-## Workflow
+## 工作流程
 
-1. Collect the user's raw notes, CSV metrics and any linked context.
-2. Group work items into the canonical sections below.
-3. Quantify progress wherever CSV metrics are available — every claim should cite a number.
-4. Write the report in Markdown, then offer a docx export if the user asks.
+1. 收集用户的原始笔记、CSV 指标和关联上下文。
+2. 把工作项归入下方规定的五个章节。
+3. 凡有 CSV 指标支撑的结论都要给出具体数字。
+4. 用 Markdown 输出周报；用户需要时再导出 docx。
 
-## Output format
+## 输出格式
 
-The report must follow this structure:
+周报必须包含以下章节：
 
-- Highlights of the week
-- Progress by workstream (table with owner, status, delta)
-- Metrics snapshot (table from the CSV)
-- Risks and blockers
-- Plan for next week
+- 本周亮点
+- 各工作流进展（表格：负责人、状态、环比变化）
+- 指标快照（由 CSV 生成的表格）
+- 风险与阻塞
+- 下周计划
 
-## Rules
+## 规则
 
-- Must keep the five output sections in the order above.
-- Must write dates in ISO format (YYYY-MM-DD).
-- Never invent metrics that are not in the CSV.
-- Never use emoji in the report body.
-- Do not include attendee lists or raw meeting transcripts.
-- Always flag workstreams with no update as "no update provided".
+- 必须保持以上五个章节的顺序。
+- 日期必须使用 ISO 格式（YYYY-MM-DD）。
+- 禁止编造 CSV 中不存在的指标数据。
+- 禁止在周报正文中使用 emoji。
+- 不要包含参会人名单或原始会议逐字稿。
+- 没有更新的工作流必须标注“本周无更新”。
 
-## Quality bar
+## 质量标准
 
-- The report should be readable in under 3 minutes.
-- Highlights should be outcome-oriented, not a task list.
-- Tables should be consistent week over week so they can be diffed.
+- 周报应能在 3 分钟内读完。
+- 本周亮点应聚焦成果，而不是罗列任务。
+- 表格格式应逐周保持一致，方便对比。
 
-## Example
+## 示例
 
 \`\`\`markdown
-## Highlights of the week
-- Shipped the new onboarding flow; activation rose 12% WoW (n=4,213).
+## 本周亮点
+- 新版新手引导上线，激活率环比提升 12%（样本量 4,213）。
 
-## Metrics snapshot
-| metric | this week | last week | delta |
+## 指标快照
+| 指标 | 本周 | 上周 | 变化 |
 | --- | --- | --- | --- |
-| activation | 38.2% | 34.1% | +4.1pp |
+| 激活率 | 38.2% | 34.1% | +4.1pp |
 \`\`\`
 `;

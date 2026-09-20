@@ -19,15 +19,15 @@ const FORMAT_KEYWORDS: [RegExp, string][] = [
 ];
 
 const INPUT_PATTERNS: [RegExp, string][] = [
-  [/上传|upload|附件|attach/i, "user-uploaded file"],
-  [/\.(csv|xlsx?|tsv)\b/i, "tabular data file"],
-  [/\.(png|jpe?g|webp|gif)\b/i, "image file"],
-  [/\.(md|markdown)\b/i, "markdown document"],
-  [/\.pdf\b/i, "PDF document"],
-  [/url|链接|website|网页/i, "URL / web page"],
-  [/自然语言|natural.?language|用户需求|prompt/i, "natural-language request"],
-  [/代码|\bcodes?\b|\brepos(?:itory)?\b|github/i, "source code"],
-  [/数据|dataset|数据库|database/i, "dataset"],
+  [/自然语言|natural.?language|用户需求|prompt/i, "自然语言需求"],
+  [/上传|upload|附件|attach/i, "用户上传的文件"],
+  [/\.(csv|xlsx?|tsv)\b/i, "表格数据文件（CSV / Excel）"],
+  [/\.(png|jpe?g|webp|gif)\b/i, "图片文件"],
+  [/\.(md|markdown)\b/i, "Markdown 文档"],
+  [/\.pdf\b/i, "PDF 文档"],
+  [/url|链接|website|网页/i, "URL / 网页链接"],
+  [/代码|\bcodes?\b|\brepos(?:itory)?\b|github/i, "源代码"],
+  [/数据|dataset|数据库|database/i, "数据集"],
 ];
 
 const CONSTRAINT_RE =
@@ -134,10 +134,10 @@ function extractTriggers(description: string): string[] {
     // cut the capture at the end of the sentence and drop a leading "keywords:" label
     const capture = m[1]
       .split(/[.。]/)[0]
-      .replace(/^(trigger\s*)?keywords?\s*[:：]?\s*/i, "");
+      .replace(/^(trigger\s*)?(keywords?|关键词|关键字)\s*[:：]?\s*/i, "");
     out.push(
       ...capture
-        .split(/[,，、;；"“”']+/)
+        .split(/[,，、;;"“”']+/)
         .map((s) => s.trim())
         .filter((s) => s.length > 1 && s.length < 40),
     );
