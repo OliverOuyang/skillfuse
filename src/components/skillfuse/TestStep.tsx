@@ -2,8 +2,9 @@ import { useMemo, useState } from "react";
 import { ArrowLeft, CheckCircle2, FlaskConical, RotateCcw, Sparkles, XCircle } from "lucide-react";
 import type { Artifacts, ModelConfig, RuleCheck, RuleResult } from "@/core/types";
 import { aggregate, runRuleChecks } from "@/core/runRules";
-import { runJudge } from "@/core/llm";
-import { StepHeading } from "./chrome";
+import { describeError, runJudge } from "@/core/llm";
+import { Button } from "@/components/ui";
+import { StepFooter, StepHeading } from "./chrome";
 import { cn } from "@/lib/utils";
 
 export function TestStep({
@@ -11,11 +12,13 @@ export function TestStep({
   modelCfg,
   onBack,
   onRestart,
+  onOpenModelSettings,
 }: {
   artifacts: Artifacts;
   modelCfg: ModelConfig | null;
   onBack: () => void;
   onRestart: () => void;
+  onOpenModelSettings: () => void;
 }) {
   const rules = useMemo(() => JSON.parse(artifacts.ruleChecksJson) as RuleCheck[], [artifacts]);
   const [sample, setSample] = useState("");
@@ -35,7 +38,8 @@ export function TestStep({
       const r = await runJudge(modelCfg, artifacts.llmJudgePrompt, "（浏览器试运行）", sample);
       setJudgeState({ status: "done", score: r.score, reasoning: r.reasoning });
     } catch (e) {
-      setJudgeState({ status: "error", message: (e as Error).message.slice(0, 140) });
+      const d = describeError(e);
+      setJudgeState({ status: "error", message: [d.message, d.hint].filter(Boolean).join(" — ") });
     }
   };
 
@@ -57,7 +61,7 @@ export function TestStep({
             value={sample}
             onChange={(e) => setSample(e.target.value)}
             placeholder="把跑 skill 得到的真实（或草稿）输出粘贴到这里…"
-            className="h-[340px] w-full resize-y rounded-lg border bg-white p-3.5 font-code text-[12px] leading-relaxed outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+            className="h-[340px] w-full resize-y rounded-lg border bg-card p-3.5 font-code text-[12px] leading-relaxed outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
           />
           <div className="mt-3 flex gap-2.5">
             <button
@@ -67,6 +71,11 @@ export function TestStep({
             >
               <FlaskConical className="h-4 w-4" /> 运行规则评分
             </button>
+            {!modelCfg && (
+              <Button variant="secondary" onClick={onOpenModelSettings}>
+                <Sparkles className="h-4 w-4" /> 接入模型以运行评审
+              </Button>
+            )}
             {modelCfg && (
               <button
                 onClick={runLlmJudge}
@@ -86,7 +95,7 @@ export function TestStep({
             结果
           </p>
           {!results && judgeState.status !== "done" ? (
-            <div className="flex h-[340px] flex-col items-center justify-center rounded-lg border border-dashed bg-white text-center">
+            <div className="flex h-[340px] flex-col items-center justify-center rounded-lg border border-dashed bg-card text-center">
               <FlaskConical className="h-8 w-8 text-muted-foreground/40" />
               <p className="mt-3 text-[13px] text-muted-foreground">
                 {rules.length} 条规则检查已就绪——粘贴一段输出后运行。
@@ -95,7 +104,7 @@ export function TestStep({
           ) : (
             <div className="space-y-3">
               {results && (
-                <div className="rounded-lg border bg-white p-4">
+                <div className="rounded-lg border bg-card p-4">
                   <div className="mb-3 flex items-end justify-between">
                     <div>
                       <p className="text-[26px] font-extrabold tracking-tight">
@@ -145,7 +154,7 @@ export function TestStep({
                 </div>
               )}
               {judgeState.status === "error" && (
-                <div className="rounded-lg border border-red-200 bg-red-50 p-3.5 text-[12.5px] text-red-700">
+                <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3.5 text-[12.5px] leading-relaxed text-destructive">
                   LLM 评审失败：{judgeState.message}
                 </div>
               )}
@@ -154,17 +163,14 @@ export function TestStep({
         </div>
       </div>
 
-      <div className="mt-8 flex items-center gap-3">
-        <button onClick={onBack} className="flex items-center gap-1.5 rounded-lg border bg-white px-4 py-2.5 text-[13px] font-medium hover:bg-muted">
+      <StepFooter>
+        <Button variant="secondary" onClick={onBack}>
           <ArrowLeft className="h-4 w-4" /> 上一步
-        </button>
-        <button
-          onClick={onRestart}
-          className="flex items-center gap-1.5 rounded-lg border bg-white px-4 py-2.5 text-[13px] font-medium hover:bg-muted"
-        >
+        </Button>
+        <Button variant="secondary" onClick={onRestart}>
           <RotateCcw className="h-4 w-4" /> 导入另一个 skill
-        </button>
-      </div>
+        </Button>
+      </StepFooter>
     </div>
   );
 }

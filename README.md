@@ -17,7 +17,13 @@ npm install
 npm run dev    # http://localhost:3000
 ```
 
-四步引导：**导入 Skill → 检查解析 → 生成 → 测试**。
+四步引导：**导入 Skill → 检查 Skill → 生成评测包 → 试运行**。
+
+界面要点：
+
+- **检查页**：规范得分环形图 + 六个维度分类卡片，每条问题都带「怎么修」的可执行建议，支持按严重级 / 分类 / 关键词筛选，并可一键导出 Markdown 检查报告。
+- **生成页**：规则评分器可直接在界面上开关、调权重、改参数与关键词；数据集条目可增删改；产物文件带语法高亮、行内搜索与逐文件下载。改动即时回写到下载的评测包里。
+- 深色模式、移动端步骤条、操作结果轻提示（Toast）。
 
 ### 命令行 CLI
 
@@ -25,7 +31,10 @@ npm run dev    # http://localhost:3000
 npx tsx cli/skillfuse.ts ./SKILL.md --out ./out
 # 也支持目录或 zip：
 npx tsx cli/skillfuse.ts ./skills/customer-support
+# --strict：存在 error 级规范问题时以非 0 退出，可直接接进 CI
 ```
+
+CLI 与 Web 共用同一套引擎，除评测包外还会输出 `spec_report.md`（规范检查报告）。
 
 ### 接入 Langfuse
 
@@ -48,8 +57,9 @@ SKILL.md ──► parseSkill    解析 frontmatter 与章节（js-yaml）
                             · 评审提示词 = 质量标准 + 硬约束 → 评分细则（rubric）
 ```
 
-**规则即数据**：`rule_checks.json` 同时被浏览器内运行器（Test 页即时试运行）和
+**规则即数据**：`rule_checks.json` 同时被浏览器内运行器（试运行页即时执行）和
 生成的 `rule_scorers.py` 以相同逻辑解释——你在网页里看到的分数，就是 Langfuse 会算出的分数。
+两侧的加权长度实现已做过一致性校验（同一份输出、同一个分数）。
 
 长度类规则对中文做了加权（CJK 字符信息密度约为拉丁字符两倍），中英文 skill 都适用。
 
@@ -65,14 +75,23 @@ SKILL.md ──► parseSkill    解析 frontmatter 与章节（js-yaml）
 | `llm_judge.py` | 评审评分器，支持任意 OpenAI 兼容端点 |
 | `langfuse_config.py` | 一键建数据集 + 评测运行骨架 |
 | `.env.example` | 环境变量模板 |
+| `spec_report.md` | 规范检查报告（仅 CLI 输出） |
 
 ## 可选：接入你自己的模型
 
-Web 界面右上角「模型设置」填入 `Base URL` + `API key` + 模型名（任意 OpenAI 兼容端点），即可：
+点右上角的模型状态按钮打开「模型接入」：
 
-- 让你的模型补充更多数据集条目（Generate 页）
-- 在浏览器里直接运行 LLM 评审（Test 页）
+- **服务商预设**：OpenAI、DeepSeek、Moonshot / Kimi、通义千问（DashScope）、智谱 GLM、硅基流动、OpenRouter、本地 Ollama / vLLM，以及任意自定义 OpenAI 兼容端点——选中即自动填好 Base URL 与常用模型名。
+- **测试连接**：发一条极小请求，同时验证 Base URL、密钥与模型名，返回延迟与模型回声。
+- **从端点拉取模型列表**：支持 `/models` 的端点可直接点选，不支持的手填即可。
+- **高级参数**：温度、最大输出 token、请求超时。
 
+接入后可以：
+
+- 让你的模型补充更多数据集条目（生成页，可选 +2 / +3 / +5 / +8 条，支持中途取消）
+- 在浏览器里直接运行 LLM 评审（试运行页）
+
+请求失败时会按 鉴权 / 端点不存在 / 限流 / 超时 / 跨域 分类给出具体的下一步建议。
 密钥只保存在你浏览器的 localStorage 中，不会发送到任何其他地方。
 
 ## 隐私

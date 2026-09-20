@@ -6,26 +6,59 @@
 
 @layer base {
   :root {
-    --background: 240 20% 99%;
-    --foreground: 240 10% 3.9%;
+    --background: 240 24% 98%;
+    --foreground: 240 12% 8%;
     --card: 0 0% 100%;
-    --card-foreground: 240 10% 3.9%;
+    --card-foreground: 240 12% 8%;
     --popover: 0 0% 100%;
-    --popover-foreground: 240 10% 3.9%;
+    --popover-foreground: 240 12% 8%;
     --primary: 248 89% 66%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 240 4.8% 95.9%;
-    --secondary-foreground: 240 5.9% 10%;
-    --muted: 240 4.8% 95.9%;
-    --muted-foreground: 240 3.8% 46.1%;
-    --accent: 240 4.8% 95.9%;
-    --accent-foreground: 240 5.9% 10%;
-    --destructive: 0 84.2% 60.2%;
+    --secondary: 240 5% 96%;
+    --secondary-foreground: 240 6% 10%;
+    --muted: 240 5% 96%;
+    --muted-foreground: 240 4% 46%;
+    --accent: 240 5% 96%;
+    --accent-foreground: 240 6% 10%;
+    --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 98%;
-    --border: 240 6% 91%;
-    --input: 240 6% 91%;
+    --success: 160 84% 32%;
+    --warning: 38 92% 45%;
+    --border: 240 6% 90%;
+    --input: 240 6% 90%;
     --ring: 248 89% 66%;
-    --radius: 0.625rem;
+    --radius: 0.7rem;
+    /* 代码视图配色，浅色主题下也保持深色代码面板 */
+    --code-bg: 240 22% 9%;
+    --code-fg: 240 20% 86%;
+    color-scheme: light;
+  }
+
+  .dark {
+    --background: 240 14% 7%;
+    --foreground: 240 15% 95%;
+    --card: 240 13% 11%;
+    --card-foreground: 240 15% 95%;
+    --popover: 240 13% 12%;
+    --popover-foreground: 240 15% 95%;
+    --primary: 250 90% 72%;
+    --primary-foreground: 240 20% 8%;
+    --secondary: 240 10% 17%;
+    --secondary-foreground: 240 15% 92%;
+    --muted: 240 10% 17%;
+    --muted-foreground: 240 8% 64%;
+    --accent: 240 10% 18%;
+    --accent-foreground: 240 15% 92%;
+    --destructive: 0 72% 62%;
+    --destructive-foreground: 0 0% 98%;
+    --success: 158 64% 48%;
+    --warning: 38 92% 58%;
+    --border: 240 8% 22%;
+    --input: 240 8% 22%;
+    --ring: 250 90% 72%;
+    --code-bg: 240 16% 8%;
+    --code-fg: 240 20% 86%;
+    color-scheme: dark;
   }
 }
 
@@ -37,8 +70,53 @@
     @apply bg-background text-foreground;
     font-family: 'Inter', -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
     -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
   }
   .font-code {
     font-family: 'JetBrains Mono', ui-monospace, monospace;
+  }
+  /* 统一的键盘焦点样式：鼠标点击不出现，Tab 导航时清晰可见 */
+  :focus-visible {
+    @apply outline-none ring-2 ring-ring/60 ring-offset-2 ring-offset-background;
+  }
+}
+
+@layer components {
+  /* 细长滚动条，避免内嵌面板里出现粗重的系统滚动条 */
+  .scroll-slim {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+  .scroll-slim::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scroll-slim::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--border));
+    border-radius: 999px;
+  }
+  .scroll-slim::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@layer utilities {
+  .animate-in-up {
+    animation: in-up 0.24s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  @keyframes in-up {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .animate-in-up {
+      animation: none;
+    }
   }
 }

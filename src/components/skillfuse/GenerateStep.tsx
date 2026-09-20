@@ -1,70 +1,113 @@
-import { useMemo, useState } from "react";
-import { ArrowLeft, ArrowRight, Package, Sparkles } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  FileCode2,
+  FlaskConical,
+  Loader2,
+  Package,
+  Plus,
+  RotateCcw,
+  Scale,
+  Settings2,
+  Sparkles,
+  Trash2,
+  X,
+} from "lucide-react";
 import JSZip from "jszip";
-import type { Artifacts, DatasetItem, ModelConfig, SkillAnalysis } from "@/core/types";
-import { augmentDatasetItems } from "@/core/llm";
-import { CodeView, CopyButton, DownloadButton, downloadText } from "./CodeView";
-import { StepHeading } from "./chrome";
+import type { Artifacts, DatasetItem, ModelConfig, RuleCheck, SkillAnalysis } from "@/core/types";
+import { augmentDatasetItems, describeError } from "@/core/llm";
+import { CodeView, CopyButton, DownloadButton } from "./CodeView";
+import { downloadText } from "./download";
+import { StepFooter, StepHeading } from "./chrome";
+import { Badge, Button, Card, EmptyState, SectionLabel, Segmented, Toggle } from "@/components/ui";
+import { useToast } from "@/components/ui/toast-context";
 import { cn } from "@/lib/utils";
 
-interface Tab {
-  id: keyof Artifacts | "dataset_items_aug";
+interface FileTab {
+  id: keyof Artifacts;
   file: string;
   lang: string;
+  desc: string;
 }
 
-const TABS: Tab[] = [
-  { id: "datasetSchema", file: "dataset_schema.json", lang: "json" },
-  { id: "datasetItems", file: "dataset_items.json", lang: "json" },
-  { id: "ruleScorersPy", file: "rule_scorers.py", lang: "python" },
-  { id: "ruleChecksJson", file: "rule_checks.json", lang: "json" },
-  { id: "llmJudgePrompt", file: "llm_judge_prompt.md", lang: "markdown" },
-  { id: "llmJudgePy", file: "llm_judge.py", lang: "python" },
-  { id: "langfuseConfigPy", file: "langfuse_config.py", lang: "python" },
-  { id: "envExample", file: ".env.example", lang: "env" },
-  { id: "packReadme", file: "README.md", lang: "markdown" },
+const FILES: FileTab[] = [
+  { id: "datasetSchema", file: "dataset_schema.json", lang: "json", desc: "Langfuse 数据集定义" },
+  { id: "datasetItems", file: "dataset_items.json", lang: "json", desc: "数据集条目" },
+  { id: "ruleScorersPy", file: "rule_scorers.py", lang: "python", desc: "确定性规则评分器" },
+  { id: "ruleChecksJson", file: "rule_checks.json", lang: "json", desc: "规则的数据形态" },
+  { id: "llmJudgePrompt", file: "llm_judge_prompt.md", lang: "markdown", desc: "评审 rubric" },
+  { id: "llmJudgePy", file: "llm_judge.py", lang: "python", desc: "LLM 评审评分器" },
+  { id: "langfuseConfigPy", file: "langfuse_config.py", lang: "python", desc: "一键建数据集" },
+  { id: "envExample", file: ".env.example", lang: "env", desc: "环境变量模板" },
+  { id: "packReadme", file: "README.md", lang: "markdown", desc: "评测包说明" },
 ];
+
+const KIND_LABEL: Record<RuleCheck["kind"], string> = {
+  non_empty: "非空",
+  min_length: "最小长度",
+  max_length: "最大长度",
+  contains_any: "包含任一",
+  contains_all: "包含全部",
+  not_contains: "不得包含",
+  has_heading: "含标题",
+  valid_json: "合法 JSON",
+  has_table: "含表格",
+  has_code_block: "含代码块",
+  no_emoji: "无 emoji",
+};
+
+type View = "rules" | "items" | "files";
 
 export function GenerateStep({
   analysis,
   artifacts,
+  rules,
+  items,
   modelCfg,
-  onAugmented,
+  onRulesChange,
+  onItemsChange,
+  onReset,
+  onOpenModelSettings,
   onBack,
   onNext,
 }: {
   analysis: SkillAnalysis;
   artifacts: Artifacts;
+  rules: RuleCheck[];
+  items: DatasetItem[];
   modelCfg: ModelConfig | null;
-  onAugmented: (items: DatasetItem[]) => void;
+  onRulesChange: (r: RuleCheck[]) => void;
+  onItemsChange: (i: DatasetItem[]) => void;
+  onReset: () => void;
+  onOpenModelSettings: () => void;
   onBack: () => void;
   onNext: () => void;
 }) {
-  const [active, setActive] = useState<Tab>(TABS[0]);
+  const toast = useToast();
+  const [view, setView] = useState<View>("rules");
+  const [activeFile, setActiveFile] = useState<FileTab>(FILES[0]);
   const [augmenting, setAugmenting] = useState(false);
-  const [augMsg, setAugMsg] = useState<string | null>(null);
+  const [augCount, setAugCount] = useState(3);
+  const abortRef = useRef<AbortController | null>(null);
 
-  const content = artifacts[active.id as keyof Artifacts] ?? "";
-
-  const itemCount = useMemo(() => {
-    try {
-      return (JSON.parse(artifacts.datasetItems) as DatasetItem[]).length;
-    } catch {
-      return 0;
-    }
-  }, [artifacts.datasetItems]);
+  const activeRules = rules.filter((r) => r.enabled !== false);
+  const weightTotal = activeRules.reduce((s, r) => s + r.weight, 0);
 
   const augment = async () => {
     if (!modelCfg) return;
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
     setAugmenting(true);
-    setAugMsg(null);
     try {
-      const existing = JSON.parse(artifacts.datasetItems) as DatasetItem[];
-      const extra = await augmentDatasetItems(modelCfg, analysis, existing, 3);
-      onAugmented(extra);
-      setAugMsg(`已用你的模型新增 ${extra.length} 条条目（${modelCfg.model}）`);
+      const extra = await augmentDatasetItems(modelCfg, analysis, items, augCount, { signal: ac.signal });
+      onItemsChange([...items, ...extra]);
+      setView("items");
+      toast({ kind: "success", message: `已新增 ${extra.length} 条数据集条目`, detail: `来自 ${modelCfg.model}` });
     } catch (e) {
-      setAugMsg(`补充失败：${(e as Error).message.slice(0, 120)}`);
+      const d = describeError(e);
+      toast({ kind: "error", message: `补充条目失败：${d.message}`, detail: d.hint });
     } finally {
       setAugmenting(false);
     }
@@ -73,9 +116,7 @@ export function GenerateStep({
   const downloadZip = async () => {
     const zip = new JSZip();
     const folder = zip.folder(`${analysis.skillName}-eval`)!;
-    for (const t of TABS) {
-      folder.file(t.file, artifacts[t.id as keyof Artifacts] ?? "");
-    }
+    for (const f of FILES) folder.file(f.file, artifacts[f.id] ?? "");
     const blob = await zip.generateAsync({ type: "blob" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -83,6 +124,7 @@ export function GenerateStep({
     a.download = `${analysis.skillName}-eval.zip`;
     a.click();
     URL.revokeObjectURL(url);
+    toast({ kind: "success", message: "评测包已下载", detail: `${analysis.skillName}-eval.zip（${FILES.length} 个文件）` });
   };
 
   return (
@@ -90,87 +132,437 @@ export function GenerateStep({
       <StepHeading
         kicker="第 3 步 · 生成"
         title="你的评测包"
-        sub={`已为「${analysis.skillName}」生成 ${itemCount} 个数据集条目和 ${JSON.parse(artifacts.ruleChecksJson).length} 条规则检查。以下内容可直接导入 Langfuse 项目使用。`}
+        sub={`已为「${analysis.skillName}」生成 ${items.length} 个数据集条目和 ${activeRules.length} 条规则检查。规则与条目都可以在这里直接调，改完即时反映到右侧产物文件里。`}
       />
 
+      {/* 操作条 */}
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <button
-          onClick={downloadZip}
-          className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-[13px] font-semibold text-white shadow-sm hover:bg-primary/90"
-        >
+        <Button variant="primary" onClick={downloadZip}>
           <Package className="h-4 w-4" /> 下载整包（.zip）
-        </button>
+        </Button>
         {modelCfg ? (
-          <button
-            onClick={augment}
-            disabled={augmenting}
-            className="flex items-center gap-2 rounded-lg border border-primary/40 bg-primary/5 px-4 py-2.5 text-[13px] font-semibold text-primary hover:bg-primary/10 disabled:opacity-50"
-          >
-            <Sparkles className="h-4 w-4" />
-            {augmenting ? "正在请求你的模型…" : "用你的模型补充条目"}
-          </button>
-        ) : (
-          <span className="text-[12px] text-muted-foreground">
-            提示：配置一个模型（右上角），即可用自己的 LLM 补充数据集条目。
-          </span>
-        )}
-        {augMsg && <span className="font-code text-[11.5px] text-muted-foreground">{augMsg}</span>}
-      </div>
-
-      <div className="rounded-xl border bg-white">
-        <div className="flex flex-wrap gap-0 border-b px-2 pt-2">
-          {TABS.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => setActive(t)}
-              className={cn(
-                "rounded-t-md border-b-2 px-3 py-2 font-code text-[11.5px] font-medium transition-colors",
-                active.id === t.id
-                  ? "border-primary bg-primary/5 text-primary"
-                  : "border-transparent text-muted-foreground hover:text-foreground",
-              )}
+          <div className="flex items-center gap-1.5">
+            <Button variant="subtle" onClick={augment} disabled={augmenting}>
+              {augmenting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              {augmenting ? "正在请求你的模型…" : "用模型补充条目"}
+            </Button>
+            <select
+              value={augCount}
+              onChange={(e) => setAugCount(Number(e.target.value))}
+              className="h-10 rounded-lg border bg-card px-2 text-[12.5px] outline-none focus:border-primary"
+              aria-label="补充条目数量"
             >
-              {t.file}
-            </button>
-          ))}
-        </div>
-        <div className="p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <p className="font-code text-[12px] text-muted-foreground">{active.file}</p>
-            <div className="flex gap-2">
-              <CopyButton text={content} />
-              <DownloadButton
-                filename={active.file}
-                content={content}
-                label="下载"
-              />
-            </div>
+              {[2, 3, 5, 8].map((n) => (
+                <option key={n} value={n}>
+                  +{n} 条
+                </option>
+              ))}
+            </select>
+            {augmenting && (
+              <Button variant="ghost" size="sm" onClick={() => abortRef.current?.abort()}>
+                取消
+              </Button>
+            )}
           </div>
-          <CodeView code={content} lang={active.lang} />
+        ) : (
+          <Button variant="secondary" onClick={onOpenModelSettings}>
+            <Sparkles className="h-4 w-4" /> 接入模型以补充条目
+          </Button>
+        )}
+        <Button variant="ghost" size="sm" onClick={onReset} title="放弃对规则与条目的改动">
+          <RotateCcw className="h-3.5 w-3.5" /> 重置改动
+        </Button>
+      </div>
+
+      <Segmented<View>
+        className="mb-4"
+        value={view}
+        onChange={setView}
+        options={[
+          { value: "rules", label: <span className="flex items-center gap-1.5"><Scale className="h-3.5 w-3.5" />规则评分器</span>, count: activeRules.length },
+          { value: "items", label: <span className="flex items-center gap-1.5"><FlaskConical className="h-3.5 w-3.5" />数据集条目</span>, count: items.length },
+          { value: "files", label: <span className="flex items-center gap-1.5"><FileCode2 className="h-3.5 w-3.5" />产物文件</span>, count: FILES.length },
+        ]}
+      />
+
+      {view === "rules" && (
+        <RuleEditor rules={rules} weightTotal={weightTotal} onChange={onRulesChange} />
+      )}
+
+      {view === "items" && <ItemEditor items={items} onChange={onItemsChange} />}
+
+      {view === "files" && (
+        <div className="grid gap-3 lg:grid-cols-[236px_minmax(0,1fr)]">
+          <Card className="h-fit overflow-hidden p-1.5">
+            {FILES.map((f) => (
+              <button
+                key={f.id}
+                onClick={() => setActiveFile(f)}
+                className={cn(
+                  "flex w-full flex-col items-start gap-0.5 rounded-md px-2.5 py-2 text-left transition-colors",
+                  activeFile.id === f.id ? "bg-primary/10" : "hover:bg-muted",
+                )}
+              >
+                <span
+                  className={cn(
+                    "font-code text-[11.5px] font-medium",
+                    activeFile.id === f.id ? "text-primary" : "text-foreground",
+                  )}
+                >
+                  {f.file}
+                </span>
+                <span className="text-[11px] text-muted-foreground">{f.desc}</span>
+              </button>
+            ))}
+          </Card>
+
+          <Card className="min-w-0 p-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="font-code text-[12.5px] font-medium">{activeFile.file}</p>
+                <p className="text-[11.5px] text-muted-foreground">
+                  {activeFile.desc} · {((artifacts[activeFile.id] ?? "").length / 1024).toFixed(1)} KB
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <CopyButton text={artifacts[activeFile.id] ?? ""} />
+                <DownloadButton filename={activeFile.file} content={artifacts[activeFile.id] ?? ""} label="下载" />
+              </div>
+            </div>
+            <CodeView code={artifacts[activeFile.id] ?? ""} lang={activeFile.lang} searchable />
+          </Card>
         </div>
-      </div>
+      )}
 
-      <div className="mt-6 rounded-lg border bg-white p-4 text-[12.5px] leading-relaxed text-muted-foreground">
-        <p className="mb-1 font-semibold text-foreground">Langfuse 快速上手</p>
-        <code
-          className="block cursor-pointer whitespace-pre rounded bg-muted p-2.5 font-code text-[11.5px] text-foreground"
-          onClick={() => downloadText("quickstart.sh", QUICKSTART)}
-        >
-          {QUICKSTART}
-        </code>
-      </div>
+      <Card className="mt-6 p-4">
+        <p className="mb-1.5 text-[13px] font-semibold">接入 Langfuse</p>
+        <div className="flex items-start justify-between gap-3">
+          <code className="block flex-1 whitespace-pre rounded-md bg-muted p-2.5 font-code text-[11.5px] leading-relaxed text-foreground">
+            {QUICKSTART}
+          </code>
+          <Button variant="secondary" size="sm" onClick={() => downloadText("quickstart.sh", QUICKSTART)}>
+            保存脚本
+          </Button>
+        </div>
+      </Card>
 
-      <div className="mt-8 flex items-center gap-3">
-        <button onClick={onBack} className="flex items-center gap-1.5 rounded-lg border bg-white px-4 py-2.5 text-[13px] font-medium hover:bg-muted">
+      <StepFooter>
+        <Button variant="secondary" onClick={onBack}>
           <ArrowLeft className="h-4 w-4" /> 上一步
-        </button>
-        <button
-          onClick={onNext}
-          className="flex items-center gap-2 rounded-lg bg-primary px-6 py-3 text-[14px] font-semibold text-white shadow-sm hover:bg-primary/90"
-        >
-          去测试评分器 <ArrowRight className="h-4 w-4" />
-        </button>
+        </Button>
+        <Button variant="primary" size="lg" onClick={onNext}>
+          去试运行评分器 <ArrowRight className="h-4 w-4" />
+        </Button>
+      </StepFooter>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* 规则编辑器                                                          */
+/* ------------------------------------------------------------------ */
+
+function RuleEditor({
+  rules,
+  weightTotal,
+  onChange,
+}: {
+  rules: RuleCheck[];
+  weightTotal: number;
+  onChange: (r: RuleCheck[]) => void;
+}) {
+  const patch = (id: string, p: Partial<RuleCheck>) =>
+    onChange(rules.map((r) => (r.id === id ? { ...r, ...p } : r)));
+
+  if (rules.length === 0) {
+    return <EmptyState icon={Scale} title="没有生成任何规则" sub="这个 skill 里没有检测到可量化的硬约束或输出格式。" />;
+  }
+
+  return (
+    <div className="space-y-2.5">
+      <div className="flex flex-wrap items-center gap-2 text-[12.5px] text-muted-foreground">
+        <Settings2 className="h-3.5 w-3.5" />
+        权重决定每条规则在总分里的占比（当前总权重 {weightTotal}）。关掉的规则不会写进评测包。
       </div>
+
+      {rules.map((rule) => {
+        const on = rule.enabled !== false;
+        const share = on && weightTotal > 0 ? (rule.weight / weightTotal) * 100 : 0;
+        return (
+          <Card key={rule.id} className={cn("p-4 transition-opacity", !on && "opacity-55")}>
+            <div className="flex items-start gap-3">
+              <div className="pt-0.5">
+                <Toggle checked={on} onChange={(v) => patch(rule.id, { enabled: v })} label={`启用规则 ${rule.name}`} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-[13.5px] font-semibold">{rule.name}</p>
+                  <Badge tone="primary">{KIND_LABEL[rule.kind]}</Badge>
+                  <span className="font-code text-[10.5px] text-muted-foreground">{rule.id}</span>
+                </div>
+                <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">{rule.description}</p>
+                <p className="mt-1 text-[11.5px] text-muted-foreground/80">来源：{rule.source}</p>
+
+                <RuleParams rule={rule} onChange={(params) => patch(rule.id, { params })} />
+              </div>
+
+              <div className="w-28 shrink-0">
+                <SectionLabel className="mb-1">权重 {rule.weight}</SectionLabel>
+                <input
+                  type="range"
+                  min={1}
+                  max={5}
+                  step={1}
+                  value={rule.weight}
+                  disabled={!on}
+                  onChange={(e) => patch(rule.id, { weight: Number(e.target.value) })}
+                  className="w-full accent-[hsl(var(--primary))]"
+                  aria-label={`${rule.name} 权重`}
+                />
+                <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted">
+                  <div className="h-full rounded-full bg-primary/70" style={{ width: `${share}%` }} />
+                </div>
+                <p className="mt-1 text-right font-code text-[10.5px] text-muted-foreground">
+                  占比 {share.toFixed(0)}%
+                </p>
+              </div>
+            </div>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+function RuleParams({ rule, onChange }: { rule: RuleCheck; onChange: (p: Record<string, unknown>) => void }) {
+  const p = rule.params ?? {};
+  const terms = Array.isArray(p.terms) ? (p.terms as string[]) : null;
+  const [draft, setDraft] = useState("");
+
+  const numberField = (key: "min" | "max", label: string) => (
+    <label className="flex items-center gap-2">
+      <span className="text-[11.5px] text-muted-foreground">{label}</span>
+      <input
+        type="number"
+        min={0}
+        value={Number(p[key] ?? 0)}
+        onChange={(e) => onChange({ ...p, [key]: Number(e.target.value) })}
+        className="h-7 w-24 rounded-md border bg-card px-2 font-code text-[11.5px] outline-none focus:border-primary"
+      />
+    </label>
+  );
+
+  const hasParams = terms || "min" in p || "max" in p || "min_match" in p;
+  if (!hasParams) return null;
+
+  return (
+    <div className="mt-2.5 space-y-2 rounded-lg border bg-muted/40 p-2.5">
+      <div className="flex flex-wrap items-center gap-3">
+        {"min" in p && numberField("min", "最小加权长度")}
+        {"max" in p && numberField("max", "最大加权长度")}
+        {terms && "min_match" in p && (
+          <label className="flex items-center gap-2">
+            <span className="text-[11.5px] text-muted-foreground">至少命中</span>
+            <input
+              type="number"
+              min={1}
+              max={terms.length}
+              value={Number(p.min_match ?? 1)}
+              onChange={(e) => onChange({ ...p, min_match: Number(e.target.value) })}
+              className="h-7 w-16 rounded-md border bg-card px-2 font-code text-[11.5px] outline-none focus:border-primary"
+            />
+            <span className="text-[11.5px] text-muted-foreground">/ {terms.length}</span>
+          </label>
+        )}
+      </div>
+
+      {terms && (
+        <div>
+          <div className="flex flex-wrap gap-1.5">
+            {terms.map((t, i) => (
+              <span
+                key={`${t}-${i}`}
+                className="inline-flex items-center gap-1 rounded-md border bg-card px-2 py-0.5 font-code text-[11px]"
+              >
+                {t}
+                <button
+                  onClick={() => onChange({ ...p, terms: terms.filter((_, j) => j !== i) })}
+                  className="text-muted-foreground hover:text-destructive"
+                  aria-label={`移除 ${t}`}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ))}
+            {terms.length === 0 && <span className="text-[11.5px] italic text-muted-foreground">暂无关键词</span>}
+          </div>
+          <div className="mt-2 flex gap-1.5">
+            <input
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && draft.trim()) {
+                  onChange({ ...p, terms: [...terms, draft.trim()] });
+                  setDraft("");
+                }
+              }}
+              placeholder="添加关键词后回车"
+              className="h-7 flex-1 rounded-md border bg-card px-2 text-[11.5px] outline-none focus:border-primary"
+            />
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={!draft.trim()}
+              onClick={() => {
+                onChange({ ...p, terms: [...terms, draft.trim()] });
+                setDraft("");
+              }}
+            >
+              <Plus className="h-3 w-3" /> 添加
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* 数据集条目编辑器                                                    */
+/* ------------------------------------------------------------------ */
+
+const SOURCE_LABEL: Record<string, string> = {
+  "skill-body": "正文推断",
+  "skill-example": "示例参考",
+  "constraint-adversarial": "约束对抗",
+  "llm-augmented": "模型补充",
+};
+
+const DIFFICULTY_TONE = { basic: "success", intermediate: "primary", edge: "warning" } as const;
+
+function ItemEditor({ items, onChange }: { items: DatasetItem[]; onChange: (i: DatasetItem[]) => void }) {
+  const stats = useMemo(() => {
+    const by: Record<string, number> = {};
+    for (const it of items) {
+      const s = String(it.metadata?.source ?? "unknown");
+      by[s] = (by[s] ?? 0) + 1;
+    }
+    return by;
+  }, [items]);
+
+  const setTask = (idx: number, task: string) =>
+    onChange(
+      items.map((it, i) =>
+        i === idx ? { ...it, input: { ...(it.input as Record<string, unknown>), task } } : it,
+      ),
+    );
+
+  const addBlank = () =>
+    onChange([
+      ...items,
+      {
+        input: { task: "", context: {} },
+        expectedOutput: { must_include: [], format: "markdown", notes: "手工添加的条目。" },
+        metadata: { source: "manual", tags: [], difficulty: "basic" },
+      },
+    ]);
+
+  if (items.length === 0) {
+    return (
+      <div className="space-y-3">
+        <EmptyState icon={FlaskConical} title="数据集里还没有条目" sub="可以手工添加，或用接入的模型补充。" />
+        <Button variant="secondary" onClick={addBlank}>
+          <Plus className="h-4 w-4" /> 添加空白条目
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2.5">
+      <div className="flex flex-wrap items-center gap-2">
+        {Object.entries(stats).map(([k, n]) => (
+          <Badge key={k} tone="neutral">
+            {SOURCE_LABEL[k] ?? k} {n}
+          </Badge>
+        ))}
+        <Button variant="secondary" size="sm" className="ml-auto" onClick={addBlank}>
+          <Plus className="h-3.5 w-3.5" /> 添加条目
+        </Button>
+      </div>
+
+      {items.map((item, idx) => {
+        const input = (item.input ?? {}) as Record<string, unknown>;
+        const expected = (item.expectedOutput ?? {}) as Record<string, unknown>;
+        const meta = item.metadata ?? {};
+        const difficulty = String(meta.difficulty ?? "basic") as keyof typeof DIFFICULTY_TONE;
+        const mustInclude = Array.isArray(expected.must_include) ? (expected.must_include as string[]) : [];
+        const mustNot = Array.isArray(expected.must_not_include) ? (expected.must_not_include as string[]) : [];
+
+        return (
+          <Card key={idx} className="p-4">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <span className="font-code text-[11px] text-muted-foreground">#{idx + 1}</span>
+              <Badge tone="neutral">{SOURCE_LABEL[String(meta.source ?? "")] ?? String(meta.source ?? "手工")}</Badge>
+              <Badge tone={DIFFICULTY_TONE[difficulty] ?? "neutral"}>{difficulty}</Badge>
+              {typeof expected.format === "string" && (
+                <Badge tone="primary">格式 {expected.format}</Badge>
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="ml-auto text-muted-foreground hover:text-destructive"
+                onClick={() => onChange(items.filter((_, i) => i !== idx))}
+                aria-label={`删除条目 ${idx + 1}`}
+              >
+                <Trash2 className="h-3.5 w-3.5" /> 删除
+              </Button>
+            </div>
+
+            <SectionLabel className="mb-1">任务（input.task）</SectionLabel>
+            <textarea
+              value={String(input.task ?? "")}
+              onChange={(e) => setTask(idx, e.target.value)}
+              rows={2}
+              className="w-full resize-y rounded-lg border bg-card p-2.5 text-[12.5px] leading-relaxed outline-none transition-colors focus:border-primary focus:ring-2 focus:ring-primary/15"
+              placeholder="描述一个应当触发该 skill 的用户请求…"
+            />
+
+            {(mustInclude.length > 0 || mustNot.length > 0) && (
+              <div className="mt-2.5 grid gap-2 sm:grid-cols-2">
+                {mustInclude.length > 0 && (
+                  <div>
+                    <SectionLabel className="mb-1">必须包含</SectionLabel>
+                    <div className="flex flex-wrap gap-1.5">
+                      {mustInclude.slice(0, 6).map((t, i) => (
+                        <Badge key={i} tone="success">
+                          {t.length > 28 ? `${t.slice(0, 28)}…` : t}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {mustNot.length > 0 && (
+                  <div>
+                    <SectionLabel className="mb-1">不得包含</SectionLabel>
+                    <div className="flex flex-wrap gap-1.5">
+                      {mustNot.slice(0, 6).map((t, i) => (
+                        <Badge key={i} tone="danger">
+                          {t.length > 28 ? `${t.slice(0, 28)}…` : t}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {typeof expected.notes === "string" && expected.notes && (
+              <p className="mt-2 text-[11.5px] leading-relaxed text-muted-foreground">{expected.notes}</p>
+            )}
+          </Card>
+        );
+      })}
     </div>
   );
 }
