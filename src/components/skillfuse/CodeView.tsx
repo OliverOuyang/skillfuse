@@ -14,7 +14,7 @@ export function CodeView({ code, lang }: { code: string; lang: string }) {
   );
 }
 
-export function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
+export function CopyButton({ text, label = "复制" }: { text: string; label?: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <button
@@ -26,7 +26,7 @@ export function CopyButton({ text, label = "Copy" }: { text: string; label?: str
       className="flex items-center gap-1.5 rounded-md border bg-white px-2.5 py-1.5 text-[12px] font-medium text-foreground transition-colors hover:bg-muted"
     >
       {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
-      {copied ? "Copied" : label}
+      {copied ? "已复制" : label}
     </button>
   );
 }

@@ -42,15 +42,14 @@ export function ModelDialog({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-1 flex items-center justify-between">
-          <h2 className="text-[16px] font-bold tracking-tight">Model settings</h2>
+          <h2 className="text-[16px] font-bold tracking-tight">模型设置</h2>
           <button onClick={onClose} className="rounded-md p-1 text-muted-foreground hover:bg-muted">
             <X className="h-4 w-4" />
           </button>
         </div>
         <p className="mb-5 text-[12.5px] leading-relaxed text-muted-foreground">
-          Optional. Point SkillFuse at any OpenAI-compatible endpoint — your own model included — to
-          augment dataset items and run the LLM judge in the browser. The key is stored only in this
-          browser's localStorage.
+          可选项。把 SkillFuse 指向任意 OpenAI 兼容端点——包括你自己的模型——即可在浏览器里
+          补充数据集条目、运行 LLM 评审。密钥只保存在当前浏览器的 localStorage 中。
         </p>
         <div className="space-y-3.5">
           <Field label="Base URL">
@@ -70,7 +69,7 @@ export function ModelDialog({
               placeholder="sk-..."
             />
           </Field>
-          <Field label="Model">
+          <Field label="模型">
             <input
               className="w-full rounded-md border bg-white px-3 py-2 font-code text-[12.5px] outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
               value={cfg.model}
@@ -88,7 +87,7 @@ export function ModelDialog({
             }}
             className="rounded-md px-3 py-2 text-[12.5px] font-medium text-muted-foreground hover:bg-muted"
           >
-            Clear
+            清除
           </button>
           <button
             onClick={() => {
@@ -98,7 +97,7 @@ export function ModelDialog({
             }}
             className="rounded-md bg-primary px-4 py-2 text-[12.5px] font-semibold text-white hover:bg-primary/90"
           >
-            Save
+            保存
           </button>
         </div>
       </div>

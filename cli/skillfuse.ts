@@ -46,10 +46,10 @@ async function main() {
   const skill = parseSkill(markdown, sourceName);
   const analysis = analyzeSkill(skill);
 
-  console.log(`\n▸ skill:        ${analysis.skillName}`);
-  console.log(`▸ formats:      ${analysis.formats.join(", ") || "(none detected)"}`);
-  console.log(`▸ constraints:  ${analysis.constraints.length}`);
-  console.log(`▸ steps:        ${analysis.steps.length}`);
+  console.log(`\n▸ skill：      ${analysis.skillName}`);
+  console.log(`▸ 输出格式：   ${analysis.formats.join(", ") || "（未检测到）"}`);
+  console.log(`▸ 硬约束：     ${analysis.constraints.length} 条`);
+  console.log(`▸ 工作流步骤： ${analysis.steps.length} 步`);
   if (analysis.warnings.length > 0) {
     for (const w of analysis.warnings) console.log(`  ⚠ ${w}`);
   }
@@ -73,8 +73,8 @@ async function main() {
     writeFileSync(join(outDir, name), content);
     console.log(`  ✓ ${name}`);
   }
-  console.log(`\ndone → ${outDir}`);
-  console.log("next: pip install langfuse openai python-dotenv && cp .env.example .env && python langfuse_config.py");
+  console.log(`\n完成 → ${outDir}`);
+  console.log("下一步：pip install langfuse openai python-dotenv && cp .env.example .env && python langfuse_config.py");
 }
 
 main().catch((err) => {

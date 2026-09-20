@@ -32,7 +32,7 @@ export function TestStep({
     if (!modelCfg) return;
     setJudgeState({ status: "running" });
     try {
-      const r = await runJudge(modelCfg, artifacts.llmJudgePrompt, "(browser test run)", sample);
+      const r = await runJudge(modelCfg, artifacts.llmJudgePrompt, "（浏览器试运行）", sample);
       setJudgeState({ status: "done", score: r.score, reasoning: r.reasoning });
     } catch (e) {
       setJudgeState({ status: "error", message: (e as Error).message.slice(0, 140) });
@@ -42,21 +42,21 @@ export function TestStep({
   return (
     <div>
       <StepHeading
-        kicker="Step 4 · Test"
-        title="Run and validate"
-        sub="Paste any model output below to dry-run the deterministic rule scorers in your browser — the same checks ship as rule_scorers.py. If a model is configured, you can also fire the LLM judge."
+        kicker="第 4 步 · 测试"
+        title="试运行与验证"
+        sub="把任意模型输出粘贴到下方，即可在浏览器里试运行确定性规则评分器——与 rule_scorers.py 是同一套检查。配置了模型的话，还可以直接跑 LLM 评审。"
       />
 
       <div className="grid gap-4 lg:grid-cols-2">
         {/* left: input */}
         <div>
           <p className="mb-2 font-code text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-            Sample model output
+            模型输出示例
           </p>
           <textarea
             value={sample}
             onChange={(e) => setSample(e.target.value)}
-            placeholder="Paste a real (or draft) output from running your skill here…"
+            placeholder="把跑 skill 得到的真实（或草稿）输出粘贴到这里…"
             className="h-[340px] w-full resize-y rounded-lg border bg-white p-3.5 font-code text-[12px] leading-relaxed outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
           />
           <div className="mt-3 flex gap-2.5">
@@ -65,7 +65,7 @@ export function TestStep({
               disabled={!sample.trim()}
               className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-[13px] font-semibold text-white hover:bg-primary/90 disabled:opacity-40"
             >
-              <FlaskConical className="h-4 w-4" /> Run rule scorers
+              <FlaskConical className="h-4 w-4" /> 运行规则评分
             </button>
             {modelCfg && (
               <button
@@ -74,7 +74,7 @@ export function TestStep({
                 className="flex items-center gap-2 rounded-lg border border-primary/40 bg-primary/5 px-4 py-2.5 text-[13px] font-semibold text-primary hover:bg-primary/10 disabled:opacity-50"
               >
                 <Sparkles className="h-4 w-4" />
-                {judgeState.status === "running" ? "Judging…" : "Run LLM judge"}
+                {judgeState.status === "running" ? "评审中…" : "运行 LLM 评审"}
               </button>
             )}
           </div>
@@ -83,13 +83,13 @@ export function TestStep({
         {/* right: results */}
         <div>
           <p className="mb-2 font-code text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-            Results
+            结果
           </p>
           {!results && judgeState.status !== "done" ? (
             <div className="flex h-[340px] flex-col items-center justify-center rounded-lg border border-dashed bg-white text-center">
               <FlaskConical className="h-8 w-8 text-muted-foreground/40" />
               <p className="mt-3 text-[13px] text-muted-foreground">
-                {rules.length} rule checks ready — paste an output and run them.
+                {rules.length} 条规则检查已就绪——粘贴一段输出后运行。
               </p>
             </div>
           ) : (
@@ -103,11 +103,11 @@ export function TestStep({
                         <span className="text-[14px] font-semibold text-muted-foreground"> / 100</span>
                       </p>
                       <p className="font-code text-[10.5px] uppercase tracking-wider text-muted-foreground">
-                        weighted rule score
+                        加权规则得分
                       </p>
                     </div>
                     <p className="text-[12px] text-muted-foreground">
-                      {results.filter((r) => r.passed).length}/{results.length} passed
+                      {results.filter((r) => r.passed).length}/{results.length} 通过
                     </p>
                   </div>
                   <div className="mb-4 h-1.5 overflow-hidden rounded-full bg-muted">
@@ -139,14 +139,14 @@ export function TestStep({
                 <div className="rounded-lg border border-primary/25 bg-primary/5 p-4">
                   <p className="text-[20px] font-extrabold tracking-tight text-primary">
                     {judgeState.score.toFixed(2)}
-                    <span className="ml-1.5 text-[12px] font-semibold text-muted-foreground">LLM judge score</span>
+                    <span className="ml-1.5 text-[12px] font-semibold text-muted-foreground">LLM 评审得分</span>
                   </p>
                   <p className="mt-1 text-[12.5px] leading-relaxed text-foreground/80">{judgeState.reasoning}</p>
                 </div>
               )}
               {judgeState.status === "error" && (
                 <div className="rounded-lg border border-red-200 bg-red-50 p-3.5 text-[12.5px] text-red-700">
-                  LLM judge failed: {judgeState.message}
+                  LLM 评审失败：{judgeState.message}
                 </div>
               )}
             </div>
@@ -156,13 +156,13 @@ export function TestStep({
 
       <div className="mt-8 flex items-center gap-3">
         <button onClick={onBack} className="flex items-center gap-1.5 rounded-lg border bg-white px-4 py-2.5 text-[13px] font-medium hover:bg-muted">
-          <ArrowLeft className="h-4 w-4" /> Back
+          <ArrowLeft className="h-4 w-4" /> 上一步
         </button>
         <button
           onClick={onRestart}
           className="flex items-center gap-1.5 rounded-lg border bg-white px-4 py-2.5 text-[13px] font-medium hover:bg-muted"
         >
-          <RotateCcw className="h-4 w-4" /> Import another skill
+          <RotateCcw className="h-4 w-4" /> 导入另一个 skill
         </button>
       </div>
     </div>
