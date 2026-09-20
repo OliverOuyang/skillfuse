@@ -55,7 +55,8 @@ function check(rule: RuleCheck, text: string): [boolean, string] {
     case "has_code_block":
       return text.includes("```") ? [true, "找到围栏代码块"] : [false, "未找到围栏代码块"];
     case "no_emoji": {
-      const re = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{200D}]/u;
+      // 分支写法而非字符类：ZWJ / 变体选择符属于组合字符，放进字符类会被静态检查判为易错写法
+      const re = /[\u{1F300}-\u{1FAFF}]|[\u{2600}-\u{27BF}]|\u{FE0F}|\u{200D}/u;
       const m = text.match(re);
       return m ? [false, `发现 emoji：${m[0]}`] : [true, "未发现 emoji"];
     }

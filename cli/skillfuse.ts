@@ -12,7 +12,7 @@ import { basename, join, resolve } from "node:path";
 import JSZip from "jszip";
 import { parseSkill } from "../src/core/parseSkill";
 import { analyzeSkill } from "../src/core/analyze";
-import { validateSkillPackage } from "../src/core/validate";
+import { reportToMarkdown, validateSkillPackage } from "../src/core/validate";
 import { buildSkillPackage, isReadableSize } from "../src/core/package";
 import type { SkillFile } from "../src/core/types";
 import { generateArtifacts } from "../src/core/generate";
@@ -89,9 +89,12 @@ async function main() {
   console.log(`▸ 硬约束：     ${analysis.constraints.length} 条`);
   console.log(`▸ 工作流步骤： ${analysis.steps.length} 步`);
 
-  console.log(`\n▸ 规范检查：   得分 ${report.score}/100（通过 ${report.summary.passed} 条规则）`);
+  console.log(
+    `\n▸ 规范检查：   得分 ${report.score}/100（通过 ${report.summary.passed}/${report.summary.total} 条规则）`,
+  );
   for (const issue of report.issues) {
-    console.log(`  ${SEV_ICON[issue.severity]} [${SEV_LABEL[issue.severity]}] ${issue.message}`);
+    console.log(`  ${SEV_ICON[issue.severity]} [${SEV_LABEL[issue.severity]}] ${issue.ruleName} — ${issue.message}`);
+    if (issue.hint) console.log(`      怎么修：${issue.hint}`);
   }
   if (report.issues.length === 0) {
     console.log("  ✓ 全部规则通过");
@@ -115,6 +118,7 @@ async function main() {
     "langfuse_config.py": artifacts.langfuseConfigPy,
     ".env.example": artifacts.envExample,
     "README.md": artifacts.packReadme,
+    "spec_report.md": reportToMarkdown(report, analysis.skillName),
   };
   for (const [name, content] of Object.entries(outputs)) {
     writeFileSync(join(outDir, name), content);

@@ -1,4 +1,4 @@
-import type { Artifacts, DatasetItem, RuleCheck, SkillAnalysis } from "./types";
+import type { Artifacts, DatasetItem, GenerateOptions, RuleCheck, SkillAnalysis } from "./types";
 
 const DAY = new Date().toISOString().slice(0, 10);
 
@@ -6,9 +6,13 @@ const DAY = new Date().toISOString().slice(0, 10);
 /* public entry                                                        */
 /* ------------------------------------------------------------------ */
 
-export function generateArtifacts(a: SkillAnalysis): Artifacts {
-  const rules = buildRuleChecks(a);
-  const items = buildDatasetItems(a);
+/**
+ * 组装评测包。
+ * `options` 允许界面把用户改过的规则 / 条目回灌进来——生成物与界面所见始终一致。
+ */
+export function generateArtifacts(a: SkillAnalysis, options: GenerateOptions = {}): Artifacts {
+  const rules = cleanRules(options.rules ?? buildRuleChecks(a));
+  const items = options.items ?? buildDatasetItems(a);
   const datasetName = `${a.skillName}-eval`;
 
   return {
@@ -35,7 +39,7 @@ function buildDatasetSchema(a: SkillAnalysis, datasetName: string) {
     metadata: {
       skill: a.skillName,
       generator: "skillfuse",
-      generator_version: "0.1.0",
+      generator_version: "0.2.0",
       task_types: inferTaskTypes(a),
       formats: a.formats,
     },
@@ -65,7 +69,18 @@ function buildDatasetSchema(a: SkillAnalysis, datasetName: string) {
   };
 }
 
-function buildDatasetItems(a: SkillAnalysis): DatasetItem[] {
+/** 剔除界面上被关掉的规则，并去掉只在界面里用的 enabled 字段。 */
+function cleanRules(rules: RuleCheck[]): RuleCheck[] {
+  return rules
+    .filter((r) => r.enabled !== false)
+    .map((r) => {
+      const copy: RuleCheck = { ...r };
+      delete copy.enabled;
+      return copy;
+    });
+}
+
+export function buildDatasetItems(a: SkillAnalysis): DatasetItem[] {
   const items: DatasetItem[] = [];
   const skillRef = a.description ? a.description.slice(0, 160) : a.displayName;
 
@@ -326,8 +341,8 @@ WEIGHT_TOTAL = sum(r.get("weight", 1) for r in RULES) or 1
 def _wlen(text: str) -> int:
     """加权长度：CJK 字符的信息密度约为拉丁字符的两倍。"""
     return sum(
-        2 if ("一" <= c <= "鿿" or "㐀" <= c <= "䶿" or "　" <= c <= "〿" or "＀" <= c <= "￯") else 1
-        for c in re.sub(r"\s", "", text)
+        2 if ("一" <= c <= "鿿" or "㐀" <= c <= "䶿" or "\u3000" <= c <= "〿" or "＀" <= c <= "￯") else 1
+        for c in re.sub(r"\\s", "", text)
     )
 
 

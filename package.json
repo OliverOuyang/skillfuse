@@ -1,6 +1,6 @@
 {
   "name": "skillfuse",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Turn AI skills (SKILL.md) into Langfuse-ready datasets and scorers.",
   "license": "MIT",
   "type": "module",

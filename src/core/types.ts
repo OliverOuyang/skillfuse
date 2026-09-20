@@ -30,19 +30,27 @@ export type IssueCategory =
 
 export interface ValidationIssue {
   ruleId: string;
+  /** 规则短名，用于报告标题 */
+  ruleName: string;
   severity: IssueSeverity;
   category: IssueCategory;
   /** 面向用户的中文说明 */
   message: string;
+  /** 可执行的修复建议 */
+  hint?: string;
   /** 关联文件路径；缺省表示 SKILL.md */
   filePath?: string;
 }
 
 export interface ValidationReport {
   issues: ValidationIssue[];
-  summary: { errors: number; warnings: number; infos: number; passed: number };
+  /** 全部通过的规则（用于「已通过」列表展示） */
+  passedRules: { ruleId: string; ruleName: string; category: IssueCategory }[];
+  summary: { errors: number; warnings: number; infos: number; passed: number; total: number };
   /** 0..100，按 error/warning 扣分 */
   score: number;
+  /** 按分类汇总，驱动检查页的分类卡片 */
+  byCategory: Record<IssueCategory, { errors: number; warnings: number; infos: number; passed: number; total: number }>;
 }
 
 export interface SkillSection {
@@ -106,6 +114,8 @@ export interface RuleCheck {
   weight: number;
   /** which part of the skill motivated this rule */
   source: string;
+  /** UI 开关：false 时该规则不会进入生成的评测包（生成前会被剔除） */
+  enabled?: boolean;
 }
 
 export interface RuleResult {
@@ -142,4 +152,20 @@ export interface ModelConfig {
   baseUrl: string;
   apiKey: string;
   model: string;
+  /** 预设厂商 id（见 core/providers.ts），custom 表示自定义端点 */
+  providerId?: string;
+  /** 采样温度，缺省 0.3 */
+  temperature?: number;
+  /** 单次请求最大输出 token，缺省不限制 */
+  maxTokens?: number;
+  /** 请求超时（毫秒），缺省 60000 */
+  timeoutMs?: number;
+}
+
+/** 生成评测包时的可选覆盖项——让用户在界面上调完规则与条目后重新生成。 */
+export interface GenerateOptions {
+  /** 覆盖默认规则集（已剔除禁用项） */
+  rules?: RuleCheck[];
+  /** 覆盖默认数据集条目（含 LLM 补充与用户删改） */
+  items?: DatasetItem[];
 }
