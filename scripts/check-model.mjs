@@ -143,26 +143,38 @@ step(2, "鉴权与模型列表");
   }
 }
 
+/* 推理型模型（kimi-for-coding、o 系列等）只接受默认温度，且会先把一部分预算
+   花在思维链上——去掉温度重试一次，预算也给足，否则会拿到空回声。 */
+async function chat(payload) {
+  const first = await call("/chat/completions", { method: "POST", body: JSON.stringify(payload) });
+  if (first.res.status !== 400) return { ...first, droppedTemperature: false };
+  const body = await first.res.clone().text().catch(() => "");
+  if (!/temperature/i.test(body)) return { ...first, droppedTemperature: false };
+  const { temperature: _t, ...retry } = payload;
+  const second = await call("/chat/completions", { method: "POST", body: JSON.stringify(retry) });
+  return { ...second, droppedTemperature: true };
+}
+
 /* ---------- 3. 对话请求 ---------- */
 step(3, "对话请求（真正要用的能力）");
 let chatOk = false;
+let chatBody = { model, messages: [{ role: "user", content: "只回复两个字：连通" }], temperature: 0, max_tokens: 256 };
 try {
-  const { res, ms } = await call("/chat/completions", {
-    method: "POST",
-    body: JSON.stringify({
-      model,
-      messages: [{ role: "user", content: "只回复两个字：连通" }],
-      temperature: 0,
-      max_tokens: 32,
-    }),
-  });
+  const { res, ms, droppedTemperature } = await chat(chatBody);
+  if (droppedTemperature) {
+    const { temperature: _t, ...rest } = chatBody;
+    chatBody = rest;
+    warn("该模型只接受默认温度，已去掉 temperature 重试", "这是推理型模型的常见限制，网页端与生成的 llm_judge.py 都会自动兜底，不用手动改。");
+  }
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     fail(`HTTP ${res.status}：${body.slice(0, 200)}`, explainStatus(res.status, body));
   } else {
     const data = await res.json().catch(() => null);
     const content = data?.choices?.[0]?.message?.content;
-    if (typeof content === "string") {
+    if (typeof content === "string" && !content.trim() && data?.choices?.[0]?.finish_reason === "length") {
+      fail("输出预算用尽，模型没有返回正文", "推理型模型会先消耗 token 在思维链上。网页里请把「最大输出 token」调大一些。");
+    } else if (typeof content === "string") {
       chatOk = true;
       pass(`模型回声「${content.trim().slice(0, 30)}」（${ms} ms）`);
       const usage = data?.usage;
@@ -202,14 +214,10 @@ if (!chatOk) {
   console.log(C.dim("  上一步没通过，跳过。"));
 } else {
   try {
-    const { res } = await call("/chat/completions", {
-      method: "POST",
-      body: JSON.stringify({
-        model,
-        messages: [{ role: "user", content: '只返回这个 JSON，不要任何其他内容：{"ok": true, "n": 2}' }],
-        temperature: 0,
-        max_tokens: 64,
-      }),
+    const { res } = await chat({
+      ...chatBody,
+      messages: [{ role: "user", content: '只返回这个 JSON，不要任何其他内容：{"ok": true, "n": 2}' }],
+      max_tokens: 512,
     });
     const data = await res.json().catch(() => null);
     const raw = data?.choices?.[0]?.message?.content ?? "";
