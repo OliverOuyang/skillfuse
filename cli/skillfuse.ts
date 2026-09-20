@@ -15,7 +15,8 @@ import { analyzeSkill } from "../src/core/analyze";
 import { reportToMarkdown, validateSkillPackage } from "../src/core/validate";
 import { buildSkillPackage, isReadableSize } from "../src/core/package";
 import type { SkillFile } from "../src/core/types";
-import { generateArtifacts } from "../src/core/generate";
+import { buildDatasetItems, buildRuleChecks, generateArtifacts } from "../src/core/generate";
+import { emitLoopxEvaluatorPy, emitLoopxReadme, toLoopxCases } from "../src/core/exportLoopx";
 
 const SKIP_DIRS = new Set([".git", "node_modules", "__pycache__", ".venv", "venv"]);
 
@@ -71,9 +72,23 @@ async function main() {
   const outIdx = args.indexOf("--out");
   const explicitOut = outIdx >= 0 ? args[outIdx + 1] : undefined;
   const strict = args.includes("--strict");
+  const formatIdx = args.indexOf("--format");
+  const format = formatIdx >= 0 ? args[formatIdx + 1] : "langfuse";
+  const thresholdIdx = args.indexOf("--threshold");
+  const threshold = thresholdIdx >= 0 ? Number(args[thresholdIdx + 1]) : 1;
 
   if (!input) {
-    console.error("usage: npx tsx cli/skillfuse.ts <skill.md | skill-dir | skill.zip> [--out <dir>] [--strict]");
+    console.error(
+      "usage: npx tsx cli/skillfuse.ts <skill.md | skill-dir | skill.zip> [--out <dir>] [--strict] [--format langfuse|loopx] [--threshold 1]",
+    );
+    process.exit(1);
+  }
+  if (format !== "langfuse" && format !== "loopx") {
+    console.error(`error: 未知的 --format ${format}（可选 langfuse | loopx）`);
+    process.exit(1);
+  }
+  if (!Number.isFinite(threshold) || threshold <= 0 || threshold > 1) {
+    console.error("error: --threshold 需为 (0, 1] 之间的数值");
     process.exit(1);
   }
 
@@ -104,7 +119,9 @@ async function main() {
     process.exit(1);
   }
 
-  const artifacts = generateArtifacts(analysis);
+  const rules = buildRuleChecks(analysis);
+  const items = buildDatasetItems(analysis);
+  const artifacts = generateArtifacts(analysis, { rules, items });
   const outDir = resolve(explicitOut ?? join("skillfuse-out", analysis.skillName));
   mkdirSync(outDir, { recursive: true });
 
@@ -120,12 +137,33 @@ async function main() {
     "README.md": artifacts.packReadme,
     "spec_report.md": reportToMarkdown(report, analysis.skillName),
   };
+
+  if (format === "loopx") {
+    const exported = toLoopxCases(items);
+    outputs["loopx_cases.json"] = JSON.stringify(exported.cases, null, 2);
+    outputs["loopx_structural_cases.json"] = JSON.stringify(exported.structuralOnly, null, 2);
+    outputs["loopx_manifest.json"] = JSON.stringify(exported.manifest, null, 2);
+    outputs["loopx_evaluator.py"] = emitLoopxEvaluatorPy(rules, threshold);
+    outputs["loopx_README.md"] = emitLoopxReadme(analysis.skillName, exported, threshold);
+    console.log(
+      `\n▸ 评测助手包： 正式案例 ${exported.cases.length} 条 · 结构判定案例 ${exported.structuralOnly.length} 条` +
+        (exported.skipped.length > 0 ? ` · 跳过 ${exported.skipped.length} 条` : ""),
+    );
+    if (exported.cases.length === 0) {
+      console.log("  ⚠ 还没有条目带业务确认的标准答案——正式案例为空，先在生成页补 expected_result / answer。");
+    }
+  }
+
   for (const [name, content] of Object.entries(outputs)) {
     writeFileSync(join(outDir, name), content);
     console.log(`  ✓ ${name}`);
   }
   console.log(`\n完成 → ${outDir}`);
-  console.log("下一步：pip install langfuse openai python-dotenv && cp .env.example .env && python langfuse_config.py");
+  console.log(
+    format === "loopx"
+      ? "下一步：把 loopx_cases.json 粘给 Skill 评测助手预览确认（话术见 loopx_README.md）"
+      : "下一步：pip install langfuse openai python-dotenv && cp .env.example .env && python langfuse_config.py",
+  );
 }
 
 main().catch((err) => {

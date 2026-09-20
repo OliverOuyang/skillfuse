@@ -37,6 +37,8 @@ npx tsx cli/skillfuse.ts ./SKILL.md --out ./out
 # 也支持目录或 zip：
 npx tsx cli/skillfuse.ts ./skills/customer-support
 # --strict：存在 error 级规范问题时以非 0 退出，可直接接进 CI
+# --format loopx：额外导出 SH-LoopX 评测助手案例包（--threshold 调判定阈值，默认 1）
+npx tsx cli/skillfuse.ts ./SKILL.md --out ./out --format loopx
 ```
 
 CLI 与 Web 共用同一套引擎，除评测包外还会输出 `spec_report.md`（规范检查报告）。
@@ -101,6 +103,18 @@ SKILL.md ──► parseSkill    解析 frontmatter 与章节（js-yaml）
 | `langfuse_config.py` | 一键建数据集 + 评测运行骨架 |
 | `.env.example` | 环境变量模板 |
 | `spec_report.md` | 规范检查报告（仅 CLI 输出） |
+
+`--format loopx` 或界面上的「导出评测助手案例包」另外产出：
+
+| 文件 | 作用 |
+| --- | --- |
+| `loopx_cases.json` | SH-LoopX 评测助手正式案例（已补标准答案的条目） |
+| `loopx_structural_cases.json` | 结构判定案例（尚无标准答案，只由规则评分器判结构） |
+| `loopx_evaluator.py` | 助手侧自定义代码评分器，把加权规则分压成 `task_completed` |
+| `loopx_manifest.json` | 每条案例的来源与分流原因（本地留痕，不提交给助手） |
+
+案例本体只含 `task` / `constraints` / `expected_result` 三个字段——助手的
+`normalize_evaluation_materials` 不接受多余字段。保存仍需在助手里走 preview → 人工确认。
 
 ## 可选：接入你自己的模型
 
