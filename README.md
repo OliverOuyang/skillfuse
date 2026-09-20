@@ -19,10 +19,14 @@ npm run dev    # http://localhost:3000
 
 四步引导：**导入 Skill → 检查 Skill → 生成评测包 → 试运行**。
 
+> 要在界面里真正调用模型，请用 `npm run dev`（或 `npm run preview`）在本机打开——
+> 模型请求需要本机代理转发，纯静态托管的页面只能看界面、跑不了模型。
+
 界面要点：
 
 - **检查页**：规范得分环形图 + 六个维度分类卡片，每条问题都带「怎么修」的可执行建议，支持按严重级 / 分类 / 关键词筛选，并可一键导出 Markdown 检查报告。
 - **生成页**：规则评分器可直接在界面上开关、调权重、改参数与关键词；数据集条目可增删改；产物文件带语法高亮、行内搜索与逐文件下载。改动即时回写到下载的评测包里。
+- **试运行页**：一键生成结构骨架或填入 skill 示例，边打字边出分（实时规则评分）；逐条规则可展开看「怎么改」；LLM 评审给出四维度评分条、硬约束判定与原始回复；支持选定数据集条目作为评审输入、试运行历史回溯与报告导出。
 - 深色模式、移动端步骤条、操作结果轻提示（Toast）。
 
 ### 命令行 CLI
@@ -35,6 +39,14 @@ npx tsx cli/skillfuse.ts ./skills/customer-support
 ```
 
 CLI 与 Web 共用同一套引擎，除评测包外还会输出 `spec_report.md`（规范检查报告）。
+
+### 以 Kimi for Coding 为例
+
+1. `npm run dev` 打开 http://localhost:3000
+2. 右上角模型状态 → 选「Kimi for Coding」（Base URL 自动填 `https://api.kimi.com/coding/v1`）
+3. 填入 API key，模型名填 `kimi-for-coding`
+4. 打开「本地代理转发」（该端点不给浏览器放行跨域），点「测试连接」应返回延迟与模型回声
+5. 之后即可在生成页补充数据集条目、在试运行页跑 LLM 评审
 
 ### 接入 Langfuse
 
@@ -81,7 +93,8 @@ SKILL.md ──► parseSkill    解析 frontmatter 与章节（js-yaml）
 
 点右上角的模型状态按钮打开「模型接入」：
 
-- **服务商预设**：OpenAI、DeepSeek、Moonshot / Kimi、通义千问（DashScope）、智谱 GLM、硅基流动、OpenRouter、本地 Ollama / vLLM，以及任意自定义 OpenAI 兼容端点——选中即自动填好 Base URL 与常用模型名。
+- **服务商预设**：OpenAI、DeepSeek、Kimi for Coding、Moonshot / Kimi、通义千问（DashScope）、智谱 GLM、硅基流动、OpenRouter、本地 Ollama / vLLM，以及任意自定义 OpenAI 兼容端点——选中即自动填好 Base URL 与常用模型名。
+- **本地代理转发**：厂商端点基本都不给浏览器放行跨域（CORS），直连必然失败。打开这个开关后，请求由本机的 vite 开发服务器代发，密钥仍然只从你自己的机器发出、不经过第三方。仅 `npm run dev` / `npm run preview` 下可用；直连失败时界面会直接给出「开启本地代理并重试」。
 - **测试连接**：发一条极小请求，同时验证 Base URL、密钥与模型名，返回延迟与模型回声。
 - **从端点拉取模型列表**：支持 `/models` 的端点可直接点选，不支持的手填即可。
 - **高级参数**：温度、最大输出 token、请求超时。

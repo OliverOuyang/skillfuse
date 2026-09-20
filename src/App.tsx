@@ -126,6 +126,8 @@ export default function App() {
             {step === 4 && artifacts && (
               <TestStep
                 artifacts={artifacts}
+                analysis={analysis}
+                items={items}
                 modelCfg={modelCfg}
                 onBack={() => setStep(3)}
                 onRestart={restart}
