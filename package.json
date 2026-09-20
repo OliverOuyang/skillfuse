@@ -9,7 +9,8 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "cli": "tsx cli/skillfuse.ts"
+    "cli": "tsx cli/skillfuse.ts",
+    "check:model": "node scripts/check-model.mjs"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",
