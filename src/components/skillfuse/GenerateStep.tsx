@@ -9,6 +9,7 @@ import {
   Plus,
   RotateCcw,
   Scale,
+  Send,
   Settings2,
   Sparkles,
   Trash2,
@@ -23,6 +24,7 @@ import {
   optimizeRuleChecks,
   summarizeChanges,
 } from "@/core/llm";
+import { emitLoopxEvaluatorPy, emitLoopxReadme, toLoopxCases } from "@/core/exportLoopx";
 import { CodeView, CopyButton, DownloadButton } from "./CodeView";
 import { downloadText } from "./download";
 import { StepFooter, StepHeading } from "./chrome";
@@ -62,6 +64,9 @@ const KIND_LABEL: Record<RuleCheck["kind"], string> = {
   has_code_block: "含代码块",
   no_emoji: "无 emoji",
 };
+
+/** 导出给评测助手时，加权分达到该值才判 task_completed——助手只收布尔，默认要求全过。 */
+const LOOPX_THRESHOLD = 1;
 
 type View = "rules" | "items" | "files";
 
@@ -163,6 +168,33 @@ export function GenerateStep({
     toast({ kind: "success", message: "评测包已下载", detail: `${analysis.skillName}-eval.zip（${FILES.length} 个文件）` });
   };
 
+  /** 导出 SH-LoopX 评测助手能直接消化的案例包（含规则评分器）。 */
+  const downloadLoopxPack = async () => {
+    const exported = toLoopxCases(items);
+    const zip = new JSZip();
+    const folder = zip.folder(`${analysis.skillName}-loopx`)!;
+    folder.file("loopx_cases.json", JSON.stringify(exported.cases, null, 2));
+    folder.file("loopx_structural_cases.json", JSON.stringify(exported.structuralOnly, null, 2));
+    folder.file("loopx_manifest.json", JSON.stringify(exported.manifest, null, 2));
+    folder.file("loopx_evaluator.py", emitLoopxEvaluatorPy(rules, LOOPX_THRESHOLD));
+    folder.file("README.md", emitLoopxReadme(analysis.skillName, exported, LOOPX_THRESHOLD));
+    const blob = await zip.generateAsync({ type: "blob" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${analysis.skillName}-loopx.zip`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast({
+      kind: exported.cases.length > 0 ? "success" : "info",
+      message: "评测助手案例包已下载",
+      detail:
+        exported.cases.length > 0
+          ? `正式案例 ${exported.cases.length} 条 · 结构判定案例 ${exported.structuralOnly.length} 条`
+          : `还没有条目填了标准答案——${exported.structuralOnly.length} 条只能按结构判定。在「数据集条目」里补答案后再导出。`,
+    });
+  };
+
   return (
     <div>
       <StepHeading
@@ -175,6 +207,13 @@ export function GenerateStep({
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <Button variant="primary" onClick={downloadZip}>
           <Package className="h-4 w-4" /> 下载整包（.zip）
+        </Button>
+        <Button
+          variant="secondary"
+          onClick={downloadLoopxPack}
+          title="导出 SH-LoopX 评测助手能直接消化的案例包：业务 JSON 案例 + 规则评分器。保存仍需在助手里预览确认。"
+        >
+          <Send className="h-4 w-4" /> 导出评测助手案例包
         </Button>
         {modelCfg ? (
           <div className="flex items-center gap-1.5">
@@ -550,6 +589,14 @@ function ItemEditor({ items, onChange }: { items: DatasetItem[]; onChange: (i: D
       ),
     );
 
+  /** 标准答案由业务填写——评测助手的正式案例必须带它，缺失的条目只能按结构判定。 */
+  const setAnswer = (idx: number, answer: string) =>
+    onChange(
+      items.map((it, i) =>
+        i === idx ? { ...it, expectedOutput: { ...(it.expectedOutput as Record<string, unknown>), answer } } : it,
+      ),
+    );
+
   const addBlank = () =>
     onChange([
       ...items,
@@ -591,6 +638,14 @@ function ItemEditor({ items, onChange }: { items: DatasetItem[]; onChange: (i: D
         const difficulty = String(meta.difficulty ?? "basic") as keyof typeof DIFFICULTY_TONE;
         const mustInclude = Array.isArray(expected.must_include) ? (expected.must_include as string[]) : [];
         const mustNot = Array.isArray(expected.must_not_include) ? (expected.must_not_include as string[]) : [];
+        const rawAnswer = expected.expected_result ?? expected.answer;
+        const answerText =
+          rawAnswer === undefined || rawAnswer === null
+            ? ""
+            : typeof rawAnswer === "string"
+              ? rawAnswer
+              : JSON.stringify(rawAnswer);
+        const hasAnswer = answerText.trim().length > 0;
 
         return (
           <Card key={idx} className="p-4">
@@ -620,6 +675,25 @@ function ItemEditor({ items, onChange }: { items: DatasetItem[]; onChange: (i: D
               className="w-full resize-y rounded-lg border bg-card p-2.5 text-[12.5px] leading-relaxed outline-none transition-colors focus:border-primary focus:ring-2 focus:ring-primary/15"
               placeholder="描述一个应当触发该 skill 的用户请求…"
             />
+
+            <SectionLabel className="mb-1 mt-2.5">
+              标准答案（expected_result）
+              {hasAnswer ? (
+                <Badge tone="success" className="ml-2">已填</Badge>
+              ) : (
+                <Badge tone="warning" className="ml-2">待补</Badge>
+              )}
+            </SectionLabel>
+            <textarea
+              value={answerText}
+              onChange={(e) => setAnswer(idx, e.target.value)}
+              rows={2}
+              className="w-full resize-y rounded-lg border bg-card p-2.5 font-code text-[12px] leading-relaxed outline-none transition-colors focus:border-primary focus:ring-2 focus:ring-primary/15"
+              placeholder='业务核对过的答案；SQL 取数类可填表格 JSON：{"columns": [...], "rows": [[...]], "tolerance": 0.0000005}'
+            />
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              只有填了这里的条目才会进「评测助手正式案例」；留空的进结构判定清单。不要用被测 skill 自己的输出当标准答案。
+            </p>
 
             {(mustInclude.length > 0 || mustNot.length > 0) && (
               <div className="mt-2.5 grid gap-2 sm:grid-cols-2">
