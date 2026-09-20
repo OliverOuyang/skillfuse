@@ -2,20 +2,34 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   ChevronDown,
+  Code2,
   Download,
   Eraser,
+  Eye,
   FlaskConical,
   History,
   Loader2,
+  PlayCircle,
   RotateCcw,
   Sparkles,
   Wand2,
 } from "lucide-react";
 import type { Artifacts, DatasetItem, ModelConfig, RuleCheck, RuleResult, SkillAnalysis } from "@/core/types";
 import { aggregate, ruleFixHint, runRuleChecks } from "@/core/runRules";
-import { JUDGE_DIMENSIONS, type JudgeResult, describeError, runJudge } from "@/core/llm";
-import { Badge, Button, Card, Collapsible, EmptyState, ScoreRing, SectionLabel, Toggle } from "@/components/ui";
+import { JUDGE_DIMENSIONS, type JudgeResult, describeError, runJudge, runSkillTask } from "@/core/llm";
+import {
+  Badge,
+  Button,
+  Card,
+  Collapsible,
+  EmptyState,
+  ScoreRing,
+  SectionLabel,
+  Segmented,
+  Toggle,
+} from "@/components/ui";
 import { useToast } from "@/components/ui/toast-context";
+import { MarkdownPreview } from "./MarkdownPreview";
 import { downloadText } from "./download";
 import { StepFooter, StepHeading } from "./chrome";
 import { cn } from "@/lib/utils";
@@ -28,6 +42,19 @@ interface RunRecord {
   total: number;
   sample: string;
 }
+
+/** 端到端试运行的阶段，用于按钮上的进度提示。 */
+type Stage = "idle" | "generating" | "scoring" | "judging";
+
+/** 输出区的两种看法：原始文本 / Markdown 预览。 */
+type Mode = "code" | "preview";
+
+const STAGE_LABEL: Record<Stage, string> = {
+  idle: "用模型跑需求并评分",
+  generating: "模型正在跑需求…",
+  scoring: "规则评分中…",
+  judging: "LLM 评审中…",
+};
 
 type JudgeState =
   | { status: "idle" }
@@ -60,6 +87,9 @@ export function TestStep({
   const [manualResults, setManualResults] = useState<RuleResult[] | null>(null);
   const [judge, setJudge] = useState<JudgeState>({ status: "idle" });
   const [itemIdx, setItemIdx] = useState(0);
+  const [task, setTask] = useState(() => taskOf(items[0]));
+  const [stage, setStage] = useState<Stage>("idle");
+  const [mode, setMode] = useState<Mode>("code");
   const [history, setHistory] = useState<RunRecord[]>([]);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -69,10 +99,11 @@ export function TestStep({
     [live, sample, rules, manualResults],
   );
   const score = results ? aggregate(results) : 0;
-  const judgeInput = useMemo(() => taskOf(items[itemIdx]) || "（未选择数据集条目）", [items, itemIdx]);
+  const judgeInput = task.trim() || "（未填写需求）";
 
   const record = useCallback(
-    (res: RuleResult[], judgeScore?: number) =>
+    /* 端到端跑完时 sample 的 state 还没刷新，所以允许显式传入本次被评的输出 */
+    (res: RuleResult[], judgeScore?: number, output?: string) =>
       setHistory((h) =>
         [
           {
@@ -81,7 +112,7 @@ export function TestStep({
             judgeScore,
             passed: res.filter((r) => r.passed).length,
             total: res.length,
-            sample,
+            sample: output ?? sample,
           },
           ...h,
         ].slice(0, 6),
@@ -115,6 +146,55 @@ export function TestStep({
     }
   };
 
+  /** 端到端：让配置的模型按 skill 跑这条需求，拿到输出后立刻规则评分 + LLM 评审。 */
+  const runEndToEnd = async () => {
+    if (!modelCfg || !analysis || !task.trim()) return;
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
+    setJudge({ status: "idle" });
+    setStage("generating");
+    let output = "";
+    try {
+      output = await runSkillTask(modelCfg, analysis, task, { signal: ac.signal });
+      setSample(output);
+      if (!output.trim()) {
+        toast({ kind: "error", message: "模型没有返回任何输出", detail: "可在模型设置里调大最大输出 token 后重试" });
+        setStage("idle");
+        return;
+      }
+    } catch (e) {
+      const d = describeError(e);
+      setStage("idle");
+      toast({ kind: "error", message: `跑需求失败：${d.message}`, detail: d.hint });
+      return;
+    }
+
+    setStage("scoring");
+    const res = runRuleChecks(rules, output);
+    setManualResults(res);
+
+    setStage("judging");
+    setJudge({ status: "running" });
+    try {
+      const r = await runJudge(modelCfg, artifacts.llmJudgePrompt, task, output, { signal: ac.signal });
+      setJudge({ status: "done", result: r });
+      record(res, r.score, output);
+      toast({
+        kind: "success",
+        message: `试运行完成：规则 ${(aggregate(res) * 100).toFixed(0)} · 评审 ${r.score.toFixed(2)}`,
+        detail: `${modelCfg.model} 生成并评审`,
+      });
+    } catch (e) {
+      const d = describeError(e);
+      setJudge({ status: "error", message: d.message, hint: d.hint });
+      record(res, undefined, output);
+      toast({ kind: "error", message: `LLM 评审失败：${d.message}`, detail: "规则评分已完成，可单独重试评审" });
+    } finally {
+      setStage("idle");
+    }
+  };
+
   const fillFromExample = () => {
     const code = analysis?.examples[0]?.code;
     if (code) {
@@ -124,18 +204,27 @@ export function TestStep({
   };
 
   const fillSkeleton = () => {
-    setSample(buildSkeleton(analysis));
-    toast({ kind: "info", message: "已按预期结构生成骨架", detail: "改成真实输出后再跑分更有意义" });
+    setSample(buildSkeleton(analysis, rules));
+    toast({ kind: "info", message: "已按当前规则生成骨架", detail: "章节与结构都取自现在这套评分器" });
   };
 
   const exportReport = () => {
     if (!results) return;
     downloadText(
       `${analysis?.skillName ?? "skill"}-dryrun.md`,
-      buildReport(analysis?.skillName ?? "skill", results, score, judge, sample),
+      buildReport({
+        skillName: analysis?.skillName ?? "skill",
+        task,
+        model: modelCfg?.model,
+        rules,
+        results,
+        score,
+        judge,
+        sample,
+      }),
       "text/markdown",
     );
-    toast({ kind: "success", message: "试运行报告已导出" });
+    toast({ kind: "success", message: "试运行报告已导出", detail: "含需求、模型输出、规则明细与评审理由" });
   };
 
   const failed = results?.filter((r) => !r.passed) ?? [];
@@ -145,7 +234,7 @@ export function TestStep({
       <StepHeading
         kicker="第 4 步 · 试运行"
         title="验证评分器"
-        sub="把任意模型输出粘到左边，右边即时给出确定性规则得分——与生成的 rule_scorers.py 是同一套逻辑、同一个分数。接入模型后还能直接跑 LLM 评审。"
+        sub="接入模型后可以直接让它按 skill 跑一条需求，再对结果做规则评分与 LLM 评审；也可以把现成输出粘到左边即时打分——与生成的 rule_scorers.py 是同一套逻辑、同一个分数。"
         right={
           results && (
             <Button variant="secondary" size="sm" onClick={exportReport}>
@@ -159,12 +248,17 @@ export function TestStep({
         {/* ---------- 输入 ---------- */}
         <div className="space-y-3">
           <Card className="p-3.5">
-            <SectionLabel className="mb-1.5">评审输入（作为 judge 的 input）</SectionLabel>
-            {items.length > 0 ? (
+            <SectionLabel className="mb-1.5">需求（既是模型的输入，也是评审的 input）</SectionLabel>
+            {items.length > 0 && (
               <select
                 value={itemIdx}
-                onChange={(e) => setItemIdx(Number(e.target.value))}
-                className="h-9 w-full rounded-lg border bg-card px-2 text-[12.5px] outline-none focus:border-primary"
+                onChange={(e) => {
+                  const i = Number(e.target.value);
+                  setItemIdx(i);
+                  setTask(taskOf(items[i]));
+                }}
+                className="mb-2 h-9 w-full rounded-lg border bg-card px-2 text-[12.5px] outline-none focus:border-primary"
+                aria-label="选择数据集条目"
               >
                 {items.map((it, i) => (
                   <option key={i} value={i}>
@@ -172,15 +266,27 @@ export function TestStep({
                   </option>
                 ))}
               </select>
-            ) : (
-              <p className="text-[12.5px] text-muted-foreground">没有数据集条目，评审将只看输出本身。</p>
             )}
+            <textarea
+              value={task}
+              onChange={(e) => setTask(e.target.value)}
+              placeholder="选一条数据集条目，或直接写一条需求…"
+              className="h-20 w-full resize-y rounded-lg border bg-card p-2.5 text-[12.5px] leading-relaxed outline-none transition-colors focus:border-primary focus:ring-2 focus:ring-primary/15"
+            />
           </Card>
 
           <div>
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <SectionLabel>模型输出示例</SectionLabel>
               <div className="flex flex-wrap items-center gap-1.5">
+                <Segmented<Mode>
+                  value={mode}
+                  onChange={setMode}
+                  options={[
+                    { value: "code", label: <span className="flex items-center gap-1"><Code2 className="h-3.5 w-3.5" />代码</span> },
+                    { value: "preview", label: <span className="flex items-center gap-1"><Eye className="h-3.5 w-3.5" />预览</span> },
+                  ]}
+                />
                 {analysis?.examples.length ? (
                   <Button variant="ghost" size="sm" onClick={fillFromExample}>
                     <Wand2 className="h-3.5 w-3.5" /> 填入 skill 示例
@@ -194,12 +300,22 @@ export function TestStep({
                 </Button>
               </div>
             </div>
-            <textarea
-              value={sample}
-              onChange={(e) => setSample(e.target.value)}
-              placeholder="把跑 skill 得到的真实（或草稿）输出粘贴到这里…"
-              className="h-[320px] w-full resize-y rounded-lg border bg-card p-3.5 font-code text-[12px] leading-relaxed outline-none transition-colors focus:border-primary focus:ring-2 focus:ring-primary/15"
-            />
+            {mode === "code" ? (
+              <textarea
+                value={sample}
+                onChange={(e) => setSample(e.target.value)}
+                placeholder="把跑 skill 得到的真实（或草稿）输出粘贴到这里…"
+                className="h-[320px] w-full resize-y rounded-lg border bg-card p-3.5 font-code text-[12px] leading-relaxed outline-none transition-colors focus:border-primary focus:ring-2 focus:ring-primary/15"
+              />
+            ) : (
+              <div className="h-[320px] w-full overflow-auto rounded-lg border bg-card p-3.5 scroll-slim">
+                {sample.trim() ? (
+                  <MarkdownPreview source={sample} />
+                ) : (
+                  <p className="text-[12.5px] text-muted-foreground">还没有输出可预览。</p>
+                )}
+              </div>
+            )}
             <div className="mt-1.5 flex items-center justify-between text-[11.5px] text-muted-foreground">
               <span className="font-code">
                 {sample.length} 字符 · 加权长度 {weightedLength(sample)}
@@ -212,33 +328,47 @@ export function TestStep({
           </div>
 
           <div className="flex flex-wrap gap-2.5">
-            <Button variant="primary" onClick={runRules} disabled={!sample.trim()}>
-              <FlaskConical className="h-4 w-4" /> 运行规则评分
-            </Button>
             {modelCfg ? (
               <>
                 <Button
+                  variant="primary"
+                  onClick={runEndToEnd}
+                  disabled={!task.trim() || stage !== "idle"}
+                  title="用配置的模型按 skill 跑这条需求，再对结果做规则评分与 LLM 评审"
+                >
+                  {stage === "idle" ? <PlayCircle className="h-4 w-4" /> : <Loader2 className="h-4 w-4 animate-spin" />}
+                  {STAGE_LABEL[stage]}
+                </Button>
+                <Button variant="secondary" onClick={runRules} disabled={!sample.trim() || stage !== "idle"}>
+                  <FlaskConical className="h-4 w-4" /> 只跑规则评分
+                </Button>
+                <Button
                   variant="subtle"
                   onClick={runLlmJudge}
-                  disabled={!sample.trim() || judge.status === "running"}
+                  disabled={!sample.trim() || judge.status === "running" || stage !== "idle"}
                 >
                   {judge.status === "running" ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
                     <Sparkles className="h-4 w-4" />
                   )}
-                  {judge.status === "running" ? "评审中…" : "运行 LLM 评审"}
+                  {judge.status === "running" ? "评审中…" : "只跑 LLM 评审"}
                 </Button>
-                {judge.status === "running" && (
+                {(stage !== "idle" || judge.status === "running") && (
                   <Button variant="ghost" size="sm" onClick={() => abortRef.current?.abort()}>
                     取消
                   </Button>
                 )}
               </>
             ) : (
-              <Button variant="secondary" onClick={onOpenModelSettings}>
-                <Sparkles className="h-4 w-4" /> 接入模型以运行评审
-              </Button>
+              <>
+                <Button variant="primary" onClick={runRules} disabled={!sample.trim()}>
+                  <FlaskConical className="h-4 w-4" /> 运行规则评分
+                </Button>
+                <Button variant="secondary" onClick={onOpenModelSettings}>
+                  <Sparkles className="h-4 w-4" /> 接入模型以跑需求与评审
+                </Button>
+              </>
             )}
           </div>
         </div>
@@ -453,44 +583,113 @@ function weightedLength(text: string): number {
   return n;
 }
 
-/** 按 skill 声明的输出结构拼一份骨架，方便快速试跑规则。 */
-function buildSkeleton(a: SkillAnalysis | null): string {
-  const sections = a?.outputFields.length ? a.outputFields : a?.outputSections.length ? a.outputSections : ["结论", "细节", "下一步"];
+/**
+ * 按「当前这套规则」拼骨架——包括模型优化出来的定制规则。
+ * 目标是让骨架尽量命中规则：章节取自关键词类规则的词表，结构类规则决定要不要放表格 / 代码块，
+ * 这样用户一眼能看出「规则到底在要求什么」，而不是拿一份和规则无关的模板去跑分。
+ */
+function buildSkeleton(a: SkillAnalysis | null, rules: RuleCheck[]): string {
+  const enabled = rules.filter((r) => r.enabled !== false);
+  const has = (kind: RuleCheck["kind"]) => enabled.some((r) => r.kind === kind);
+
+  // 关键词类规则的词表即「必须出现的内容」，作为章节标题
+  const wanted = enabled
+    .filter((r) => r.kind === "contains_any" || r.kind === "contains_all")
+    .flatMap((r) => ((r.params.terms as string[] | undefined) ?? []).slice(0, 6));
+  const banned = enabled
+    .filter((r) => r.kind === "not_contains")
+    .flatMap((r) => ((r.params.terms as string[] | undefined) ?? []));
+
+  const sections = [
+    ...new Set([...wanted, ...(a?.outputFields ?? []), ...(a?.outputSections ?? [])].map((s) => s.trim()).filter(Boolean)),
+  ].slice(0, 8);
+
+  if (has("valid_json")) {
+    const obj = Object.fromEntries((sections.length ? sections : ["result"]).map((s) => [s, "替换成真实值"]));
+    return JSON.stringify(obj, null, 2);
+  }
+
   const lines = [`# ${a?.displayName ?? "示例输出"}`, ""];
-  for (const s of sections.slice(0, 6)) {
+  for (const s of sections.length > 0 ? sections : ["结论", "细节", "下一步"]) {
     lines.push(`## ${s}`, "", "（在这里替换成真实内容）", "");
   }
-  if (a?.formats.includes("table")) {
+  if (has("has_table") || a?.formats.includes("table")) {
     lines.push("| 项目 | 状态 | 说明 |", "| --- | --- | --- |", "| 示例 | 进行中 | 替换成真实数据 |", "");
   }
-  if (a?.formats.includes("code")) lines.push("```python", "print(\"replace me\")", "```", "");
+  if (has("has_code_block") || a?.formats.includes("code")) {
+    lines.push("```python", 'print("replace me")', "```", "");
+  }
+  const min = Math.max(
+    0,
+    ...enabled.filter((r) => r.kind === "min_length").map((r) => Number(r.params.min ?? 0)),
+  );
+  if (min > 0) lines.push(`> 提示：当前规则要求加权长度 ≥ ${min}，正文需要写到这个体量。`, "");
+  // 只提示数量不列原词：违禁词一旦写进骨架，not_contains 规则当场就会判不通过
+  if (banned.length > 0) {
+    lines.push(`> 提示：当前规则禁用了 ${banned.length} 个措辞（见生成页的「不得包含」规则），正文请避开。`, "");
+  }
   return lines.join("\n");
 }
 
-function buildReport(
-  skillName: string,
-  results: RuleResult[],
-  score: number,
-  judge: JudgeState,
-  sample: string,
-): string {
+function buildReport({
+  skillName,
+  task,
+  model,
+  rules,
+  results,
+  score,
+  judge,
+  sample,
+}: {
+  skillName: string;
+  task: string;
+  model?: string;
+  rules: RuleCheck[];
+  results: RuleResult[];
+  score: number;
+  judge: JudgeState;
+  sample: string;
+}): string {
   const lines = [
     `# 试运行报告 — ${skillName}`,
     "",
-    `- 加权规则得分：**${(score * 100).toFixed(0)}/100**`,
-    `- 通过 ${results.filter((r) => r.passed).length}/${results.length} 条规则`,
+    `- 时间：${new Date().toLocaleString("zh-CN", { hour12: false })}`,
+    `- 加权规则得分：**${(score * 100).toFixed(0)}/100**（通过 ${results.filter((r) => r.passed).length}/${results.length} 条）`,
   ];
+  if (model) lines.push(`- 模型：\`${model}\``);
   if (judge.status === "done") {
     lines.push(`- LLM 评审得分：**${judge.result.score.toFixed(2)}**`);
     if (judge.result.constraintViolation) lines.push("- ⚠️ 评审判定违反硬约束");
   }
-  lines.push("", "## 规则明细", "");
+
+  if (task.trim()) lines.push("", "## 需求", "", task.trim());
+
+  lines.push("", "## 规则明细", "", "| 结果 | 规则 | 权重 | 来源 | 说明 |", "| --- | --- | --- | --- | --- |");
   for (const r of results) {
-    lines.push(`- ${r.passed ? "✅" : "❌"} **${r.name}**（权重 ${r.weight}）— ${r.comment}`);
+    const rule = rules.find((x) => x.id === r.id);
+    const cell = (s: string) => s.replace(/\|/g, "\\|").replace(/\n/g, " ");
+    lines.push(
+      `| ${r.passed ? "✅" : "❌"} | ${cell(r.name)} | ${r.weight} | ${cell(rule?.source ?? "—")} | ${cell(r.comment)} |`,
+    );
   }
+
+  const failed = results.filter((r) => !r.passed);
+  if (failed.length > 0) {
+    lines.push("", "## 怎么改", "");
+    for (const f of failed) {
+      const rule = rules.find((x) => x.id === f.id);
+      lines.push(`- **${f.name}**：${rule ? ruleFixHint(rule) : f.comment}`);
+    }
+  }
+
   if (judge.status === "done") {
-    lines.push("", "## 评审理由", "", judge.result.reasoning);
+    lines.push("", "## LLM 评审", "");
+    for (const d of JUDGE_DIMENSIONS) {
+      lines.push(`- ${d.label}：${judge.result.dimensions[d.key] ?? "—"}/5`);
+    }
+    lines.push("", judge.result.reasoning);
   }
-  lines.push("", "## 被评输出", "", "```", sample.slice(0, 4000), "```");
+
+  lines.push("", "## 被评输出", "", "````", sample.slice(0, 8000), "````");
   return lines.join("\n");
 }

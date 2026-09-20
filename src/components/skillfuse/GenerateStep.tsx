@@ -16,7 +16,13 @@ import {
 } from "lucide-react";
 import JSZip from "jszip";
 import type { Artifacts, DatasetItem, ModelConfig, RuleCheck, SkillAnalysis } from "@/core/types";
-import { augmentDatasetItems, describeError } from "@/core/llm";
+import {
+  type ChangeAction,
+  describeError,
+  optimizeDatasetItems,
+  optimizeRuleChecks,
+  summarizeChanges,
+} from "@/core/llm";
 import { CodeView, CopyButton, DownloadButton } from "./CodeView";
 import { downloadText } from "./download";
 import { StepFooter, StepHeading } from "./chrome";
@@ -88,28 +94,58 @@ export function GenerateStep({
   const [view, setView] = useState<View>("rules");
   const [activeFile, setActiveFile] = useState<FileTab>(FILES[0]);
   const [augmenting, setAugmenting] = useState(false);
-  const [augCount, setAugCount] = useState(3);
+  const [suggesting, setSuggesting] = useState(false);
+  const [changes, setChanges] = useState<{ action: ChangeAction; label: string; reason: string }[]>([]);
   const abortRef = useRef<AbortController | null>(null);
 
   const activeRules = rules.filter((r) => r.enabled !== false);
   const weightTotal = activeRules.reduce((s, r) => s + r.weight, 0);
 
-  const augment = async () => {
+  const optimizeItems = async () => {
     if (!modelCfg) return;
     abortRef.current?.abort();
     const ac = new AbortController();
     abortRef.current = ac;
     setAugmenting(true);
     try {
-      const extra = await augmentDatasetItems(modelCfg, analysis, items, augCount, { signal: ac.signal });
-      onItemsChange([...items, ...extra]);
+      const { next, changes } = await optimizeDatasetItems(modelCfg, analysis, items, { signal: ac.signal });
+      onItemsChange(next);
+      setChanges(changes);
       setView("items");
-      toast({ kind: "success", message: `已新增 ${extra.length} 条数据集条目`, detail: `来自 ${modelCfg.model}` });
+      toast({
+        kind: "success",
+        message: `数据集已优化：${summarizeChanges(changes)}`,
+        detail: `${items.length} → ${next.length} 条 · 来自 ${modelCfg.model}`,
+      });
     } catch (e) {
       const d = describeError(e);
-      toast({ kind: "error", message: `补充条目失败：${d.message}`, detail: d.hint });
+      toast({ kind: "error", message: `优化条目失败：${d.message}`, detail: d.hint });
     } finally {
       setAugmenting(false);
+    }
+  };
+
+  const optimizeRules = async () => {
+    if (!modelCfg) return;
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
+    setSuggesting(true);
+    try {
+      const { next, changes } = await optimizeRuleChecks(modelCfg, analysis, rules, { signal: ac.signal });
+      onRulesChange(next);
+      setChanges(changes);
+      setView("rules");
+      toast({
+        kind: "success",
+        message: `评分器已优化：${summarizeChanges(changes)}`,
+        detail: `${rules.length} → ${next.length} 条 · 判分仍由本地确定性引擎执行`,
+      });
+    } catch (e) {
+      const d = describeError(e);
+      toast({ kind: "error", message: `优化规则失败：${d.message}`, detail: d.hint });
+    } finally {
+      setSuggesting(false);
     }
   };
 
@@ -142,23 +178,25 @@ export function GenerateStep({
         </Button>
         {modelCfg ? (
           <div className="flex items-center gap-1.5">
-            <Button variant="subtle" onClick={augment} disabled={augmenting}>
-              {augmenting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-              {augmenting ? "正在请求你的模型…" : "用模型补充条目"}
-            </Button>
-            <select
-              value={augCount}
-              onChange={(e) => setAugCount(Number(e.target.value))}
-              className="h-10 rounded-lg border bg-card px-2 text-[12.5px] outline-none focus:border-primary"
-              aria-label="补充条目数量"
+            <Button
+              variant="subtle"
+              onClick={optimizeItems}
+              disabled={augmenting || suggesting}
+              title="让模型通盘优化数据集：改写模糊任务、删重复条目、补缺失的边界场景"
             >
-              {[2, 3, 5, 8].map((n) => (
-                <option key={n} value={n}>
-                  +{n} 条
-                </option>
-              ))}
-            </select>
-            {augmenting && (
+              {augmenting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              {augmenting ? "正在优化条目…" : "用模型优化数据集"}
+            </Button>
+            <Button
+              variant="subtle"
+              onClick={optimizeRules}
+              disabled={augmenting || suggesting}
+              title="让模型通盘优化评分器：调权重、改关键词、删冗余、补这个 skill 专属的检查"
+            >
+              {suggesting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Scale className="h-4 w-4" />}
+              {suggesting ? "正在优化评分器…" : "用模型优化评分器"}
+            </Button>
+            {(augmenting || suggesting) && (
               <Button variant="ghost" size="sm" onClick={() => abortRef.current?.abort()}>
                 取消
               </Button>
@@ -166,13 +204,23 @@ export function GenerateStep({
           </div>
         ) : (
           <Button variant="secondary" onClick={onOpenModelSettings}>
-            <Sparkles className="h-4 w-4" /> 接入模型以补充条目
+            <Sparkles className="h-4 w-4" /> 接入模型以优化条目与评分器
           </Button>
         )}
-        <Button variant="ghost" size="sm" onClick={onReset} title="放弃对规则与条目的改动">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            setChanges([]);
+            onReset();
+          }}
+          title="放弃对规则与条目的改动"
+        >
           <RotateCcw className="h-3.5 w-3.5" /> 重置改动
         </Button>
       </div>
+
+      {changes.length > 0 && <ChangeLog changes={changes} onDismiss={() => setChanges([])} />}
 
       <Segmented<View>
         className="mb-4"
@@ -259,6 +307,49 @@ export function GenerateStep({
 }
 
 /* ------------------------------------------------------------------ */
+/* 优化改动清单                                                        */
+/* ------------------------------------------------------------------ */
+
+const ACTION_TONE: Record<ChangeAction, "success" | "primary" | "danger" | "neutral"> = {
+  add: "success",
+  modify: "primary",
+  drop: "danger",
+  keep: "neutral",
+};
+
+const ACTION_TEXT: Record<ChangeAction, string> = { add: "新增", modify: "修改", drop: "删除", keep: "保留" };
+
+function ChangeLog({
+  changes,
+  onDismiss,
+}: {
+  changes: { action: ChangeAction; label: string; reason: string }[];
+  onDismiss: () => void;
+}) {
+  return (
+    <Card className="mb-4 border-primary/25 bg-primary/5 p-3.5">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <SectionLabel>本次优化改了什么</SectionLabel>
+        <Button variant="ghost" size="sm" onClick={onDismiss}>
+          <X className="h-3.5 w-3.5" /> 收起
+        </Button>
+      </div>
+      <ul className="space-y-1.5">
+        {changes.map((c, i) => (
+          <li key={i} className="flex items-start gap-2 text-[12.5px] leading-relaxed">
+            <Badge tone={ACTION_TONE[c.action]}>{ACTION_TEXT[c.action]}</Badge>
+            <span className="min-w-0 flex-1">
+              <span className="font-medium">{c.label}</span>
+              {c.reason && <span className="text-muted-foreground"> — {c.reason}</span>}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* 规则编辑器                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -298,6 +389,7 @@ function RuleEditor({
                 <div className="flex flex-wrap items-center gap-2">
                   <p className="text-[13.5px] font-semibold">{rule.name}</p>
                   <Badge tone="primary">{KIND_LABEL[rule.kind]}</Badge>
+                  {rule.source.includes("模型优化") && <Badge tone="neutral">模型优化</Badge>}
                   <span className="font-code text-[10.5px] text-muted-foreground">{rule.id}</span>
                 </div>
                 <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">{rule.description}</p>
@@ -436,6 +528,7 @@ const SOURCE_LABEL: Record<string, string> = {
   "skill-example": "示例参考",
   "constraint-adversarial": "约束对抗",
   "llm-augmented": "模型补充",
+  "llm-optimized": "模型优化",
 };
 
 const DIFFICULTY_TONE = { basic: "success", intermediate: "primary", edge: "warning" } as const;

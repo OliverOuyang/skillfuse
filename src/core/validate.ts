@@ -13,7 +13,16 @@ import type {
 } from "./types";
 import { SPEC_RULES } from "./specRules";
 
-const CATEGORIES: IssueCategory[] = ["structure", "frontmatter", "body", "io", "trace", "security"];
+const CATEGORIES: IssueCategory[] = [
+  "structure",
+  "naming",
+  "frontmatter",
+  "body",
+  "io",
+  "report",
+  "trace",
+  "security",
+];
 
 const SEVERITY_RANK: Record<IssueSeverity, number> = { error: 0, warning: 1, info: 2 };
 
@@ -29,6 +38,8 @@ export function validateSkillPackage(pkg: SkillPackage, parsed: ParsedSkill): Va
   const byCategory = emptyCategoryStats();
 
   for (const rule of SPEC_RULES) {
+    // 专项规则（如策略报告类）只对适用的 skill 计入总数，避免「自动通过」虚高得分
+    if (rule.applies && !rule.applies({ pkg, parsed })) continue;
     byCategory[rule.category].total += 1;
     const hit = rule.check({ pkg, parsed });
     if (!hit) {
@@ -59,7 +70,13 @@ export function validateSkillPackage(pkg: SkillPackage, parsed: ParsedSkill): Va
   return {
     issues,
     passedRules,
-    summary: { errors, warnings, infos, passed: passedRules.length, total: SPEC_RULES.length },
+    summary: {
+      errors,
+      warnings,
+      infos,
+      passed: passedRules.length,
+      total: CATEGORIES.reduce((n, c) => n + byCategory[c].total, 0),
+    },
     score: Math.max(0, 100 - errors * 10 - warnings * 3),
     byCategory,
   };
@@ -69,9 +86,11 @@ export function validateSkillPackage(pkg: SkillPackage, parsed: ParsedSkill): Va
 export function reportToMarkdown(report: ValidationReport, skillName: string): string {
   const labels: Record<IssueCategory, string> = {
     structure: "目录结构",
+    naming: "命名规范",
     frontmatter: "frontmatter",
     body: "正文结构",
     io: "输入输出",
+    report: "报告类专项",
     trace: "trace 规范",
     security: "安全基线",
   };
