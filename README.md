@@ -42,6 +42,18 @@ CLI 与 Web 共用同一套引擎，除评测包外还会输出 `spec_report.md`
 
 ### 以 Kimi for Coding 为例
 
+先在终端自检一次，确认密钥与端点没问题：
+
+```bash
+SKILLFUSE_API_KEY=sk-... npm run check:model -- \
+  --base https://api.kimi.com/coding/v1 --model kimi-for-coding
+```
+
+自检会逐项报告：端点可达性 → 鉴权与模型列表 → 对话请求 → 浏览器能否直连（CORS）→ JSON 跟随能力，
+任何一项失败都给出具体的下一步（密钥问题 / 路径问题 / 被网络代理拦截 / 需要开本地代理，各有不同的处理办法）。
+
+自检通过后：
+
 1. `npm run dev` 打开 http://localhost:3000
 2. 右上角模型状态 → 选「Kimi for Coding」（Base URL 自动填 `https://api.kimi.com/coding/v1`）
 3. 填入 API key，模型名填 `kimi-for-coding`
