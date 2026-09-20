@@ -11,12 +11,22 @@ const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2 MB — 文本类资源足够，二�
 const isJunk = (path: string) =>
   path.includes("__MACOSX") || path.endsWith(".DS_Store") || path.includes("/.git/");
 
+/**
+ * 目录上传与带包装目录的 zip 会让每个路径都多一层根目录（如 production-data/SKILL.md），
+ * 这层是打包方式带来的，不属于 skill 自身的结构——剥掉它，否则结构类检查全部误判。
+ */
+function stripWrapperDir(paths: { path: string; content: string }[]): { path: string; content: string }[] {
+  const root = paths[0]?.path.split("/")[0];
+  if (!root || !paths.every((f) => f.path.startsWith(`${root}/`))) return paths;
+  return paths.map((f) => ({ ...f, path: f.path.slice(root.length + 1) }));
+}
+
 export function buildSkillPackage(
   inputs: { path: string; content: string }[],
   sourceName: string,
 ): SkillPackage {
-  const files = inputs
-    .filter((f) => f.path.trim() && !isJunk(f.path))
+  const kept = inputs.filter((f) => f.path.trim() && !isJunk(f.path));
+  const files = stripWrapperDir(kept)
     .slice(0, MAX_FILES)
     .map((f) => ({
       path: f.path.replace(/^\.\//, ""),
