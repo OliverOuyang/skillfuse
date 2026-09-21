@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import JSZip from "jszip";
 import type { Artifacts, DatasetItem, ModelConfig, RuleCheck, SkillAnalysis } from "@/core/types";
+import { normalizeContract } from "@/core/contract";
 import {
   type ChangeAction,
   describeError,
@@ -191,7 +192,7 @@ export function GenerateStep({
       detail:
         exported.cases.length > 0
           ? `正式案例 ${exported.cases.length} 条 · 结构判定案例 ${exported.structuralOnly.length} 条`
-          : `还没有条目填了标准答案——${exported.structuralOnly.length} 条只能按结构判定。在「数据集条目」里补答案后再导出。`,
+          : `还没有条目填标准答案或确认关键数据——${exported.structuralOnly.length} 条只能按结构判定。请补齐后再导出。`,
     });
   };
 
@@ -597,12 +598,51 @@ function ItemEditor({ items, onChange }: { items: DatasetItem[]; onChange: (i: D
       ),
     );
 
+  const setFact = (idx: number, factIdx: number, field: "name" | "value" | "tolerance" | "unit", raw: string) =>
+    onChange(
+      items.map((item, itemIdx) => {
+        if (itemIdx !== idx) return item;
+        const contract = normalizeContract(item.expectedOutput);
+        const facts = contract.facts.map((fact, currentFactIdx) => {
+          if (currentFactIdx !== factIdx) return fact;
+          if (field === "value") {
+            const value = raw.trim() ? raw : null;
+            return { ...fact, value, status: value === null ? "pending" as const : "confirmed" as const };
+          }
+          if (field === "tolerance") return { ...fact, tolerance: Math.abs(Number(raw) || 0) };
+          return { ...fact, [field]: raw };
+        });
+        return { ...item, expectedOutput: normalizeContract({ ...contract, facts }) };
+      }),
+    );
+
+  // 自动抽取常常抽不到指标名，必须留手工入口，否则结构级案例无法升级为事实级
+  const addFact = (idx: number) =>
+    onChange(
+      items.map((item, itemIdx) => {
+        if (itemIdx !== idx) return item;
+        const contract = normalizeContract(item.expectedOutput);
+        const facts = [...contract.facts, { name: "", value: null, tolerance: 0, status: "pending" as const }];
+        return { ...item, expectedOutput: normalizeContract({ ...contract, facts }) };
+      }),
+    );
+
+  const removeFact = (idx: number, factIdx: number) =>
+    onChange(
+      items.map((item, itemIdx) => {
+        if (itemIdx !== idx) return item;
+        const contract = normalizeContract(item.expectedOutput);
+        const facts = contract.facts.filter((_, currentFactIdx) => currentFactIdx !== factIdx);
+        return { ...item, expectedOutput: normalizeContract({ ...contract, facts }) };
+      }),
+    );
+
   const addBlank = () =>
     onChange([
       ...items,
       {
         input: { task: "", context: {} },
-        expectedOutput: { must_include: [], format: "markdown", notes: "手工添加的条目。" },
+        expectedOutput: normalizeContract({ format: "markdown", notes: "手工添加的条目。" }),
         metadata: { source: "manual", tags: [], difficulty: "basic" },
       },
     ]);
@@ -646,6 +686,8 @@ function ItemEditor({ items, onChange }: { items: DatasetItem[]; onChange: (i: D
               ? rawAnswer
               : JSON.stringify(rawAnswer);
         const hasAnswer = answerText.trim().length > 0;
+        const contract = normalizeContract(item.expectedOutput);
+        const factsPending = contract.facts.length > 0 && contract.facts.every((fact) => fact.status === "pending");
 
         return (
           <Card key={idx} className="p-4">
@@ -656,6 +698,7 @@ function ItemEditor({ items, onChange }: { items: DatasetItem[]; onChange: (i: D
               {typeof expected.format === "string" && (
                 <Badge tone="primary">格式 {expected.format}</Badge>
               )}
+              {factsPending && <Badge tone="warning">待补关键数据</Badge>}
               <Button
                 variant="ghost"
                 size="sm"
@@ -692,8 +735,78 @@ function ItemEditor({ items, onChange }: { items: DatasetItem[]; onChange: (i: D
               placeholder='业务核对过的答案；SQL 取数类可填表格 JSON：{"columns": [...], "rows": [[...]], "tolerance": 0.0000005}'
             />
             <p className="mt-1 text-[11px] text-muted-foreground">
-              只有填了这里的条目才会进「评测助手正式案例」；留空的进结构判定清单。不要用被测 skill 自己的输出当标准答案。
+              填写标准答案或在下方确认至少一条关键数据后，条目才会进「评测助手正式案例」。不要用被测 skill 自己的输出当标准答案。
             </p>
+
+            <div className="mt-3 rounded-lg border bg-muted/30 p-3">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <SectionLabel>关键数据（facts）</SectionLabel>
+                  <Badge tone={contract.verification_level === "facts" ? "success" : "warning"}>
+                    {contract.verification_level === "facts" ? "事实级验收" : "结构级验收"}
+                  </Badge>
+                </div>
+                <div className="space-y-2">
+                  {contract.facts.length === 0 && (
+                    <p className="text-[11px] text-muted-foreground">
+                      还没有关键指标。只判结构的话可以不填；要让评测器真的核对数值，请添加指标并补上业务确认值。
+                    </p>
+                  )}
+                  <div className="hidden gap-2 px-1 text-[10.5px] text-muted-foreground sm:grid sm:grid-cols-[1.4fr_1fr_0.8fr_0.8fr_auto]">
+                    <span>指标名</span><span>值</span><span>容忍度</span><span>单位</span><span className="w-7" />
+                  </div>
+                  {contract.facts.map((fact, factIdx) => (
+                    <div key={factIdx} className="grid gap-2 sm:grid-cols-[1.4fr_1fr_0.8fr_0.8fr_auto]">
+                      <input
+                        value={fact.name}
+                        onChange={(e) => setFact(idx, factIdx, "name", e.target.value)}
+                        aria-label={`条目 ${idx + 1} 指标名 ${factIdx + 1}`}
+                        placeholder="指标名"
+                        className="h-8 rounded-md border bg-card px-2 text-[11.5px] outline-none focus:border-primary"
+                      />
+                      <input
+                        value={fact.value === null ? "" : String(fact.value)}
+                        onChange={(e) => setFact(idx, factIdx, "value", e.target.value)}
+                        aria-label={`条目 ${idx + 1} 指标值 ${factIdx + 1}`}
+                        placeholder="已确认值"
+                        className="h-8 rounded-md border bg-card px-2 font-code text-[11.5px] outline-none focus:border-primary"
+                      />
+                      <input
+                        type="number"
+                        min={0}
+                        step="any"
+                        value={fact.tolerance ?? 0}
+                        onChange={(e) => setFact(idx, factIdx, "tolerance", e.target.value)}
+                        aria-label={`条目 ${idx + 1} 容忍度 ${factIdx + 1}`}
+                        placeholder="容忍度"
+                        className="h-8 rounded-md border bg-card px-2 font-code text-[11.5px] outline-none focus:border-primary"
+                      />
+                      <input
+                        value={fact.unit ?? ""}
+                        onChange={(e) => setFact(idx, factIdx, "unit", e.target.value)}
+                        aria-label={`条目 ${idx + 1} 单位 ${factIdx + 1}`}
+                        placeholder="单位"
+                        className="h-8 rounded-md border bg-card px-2 text-[11.5px] outline-none focus:border-primary"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeFact(idx, factIdx)}
+                        aria-label={`删除条目 ${idx + 1} 的指标 ${factIdx + 1}`}
+                        className="flex h-8 w-7 items-center justify-center rounded-md border text-muted-foreground hover:text-foreground"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-[11px] leading-relaxed text-muted-foreground">
+                    数值必须来自业务已确认的 SQL / 报表 / 人工基准，不能用被测 skill 自己的输出反推。
+                  </p>
+                  <Button variant="secondary" size="sm" onClick={() => addFact(idx)}>
+                    <Plus className="h-3.5 w-3.5" /> 添加关键指标
+                  </Button>
+                </div>
+              </div>
 
             {(mustInclude.length > 0 || mustNot.length > 0) && (
               <div className="mt-2.5 grid gap-2 sm:grid-cols-2">
