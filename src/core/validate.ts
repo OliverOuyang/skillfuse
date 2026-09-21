@@ -54,7 +54,7 @@ export function validateSkillPackage(pkg: SkillPackage, parsed: ParsedSkill): Va
       severity,
       category: rule.category,
       message: hit.message,
-      hint: rule.fix,
+      hint: hit.fix ?? rule.fix,
       example: rule.example,
     });
     if (severity === "error") byCategory[rule.category].errors += 1;
@@ -96,6 +96,15 @@ export function reportToMarkdown(report: ValidationReport, skillName: string): s
     security: "安全基线",
   };
   const icon: Record<IssueSeverity, string> = { error: "🔴", warning: "🟡", info: "🔵" };
+  const verification = [
+    "",
+    "## 改完怎么验证",
+    "",
+    "1. 按每条的「建议文件」把代码块写入对应路径。",
+    "2. 重命名文件后全文搜索旧路径，并同步更新 SKILL.md 与 scripts/ 里的引用。",
+    "3. 把改完的目录重新导入 SkillFuse，或运行 `npx tsx cli/skillfuse.ts <skill 目录>`，确认本报告列出的规则 ID 不再出现。",
+    "4. 错误（🔴）必须清零，警告（🟡）建议清零，提示（🔵）按需取舍。",
+  ];
 
   const lines = [
     `# SKILL 规范检查报告 — ${skillName}`,
@@ -108,6 +117,7 @@ export function reportToMarkdown(report: ValidationReport, skillName: string): s
 
   if (report.issues.length === 0) {
     lines.push("全部规则通过，没有待修项。");
+    lines.push(...verification);
     return lines.join("\n");
   }
 
@@ -127,5 +137,6 @@ export function reportToMarkdown(report: ValidationReport, skillName: string): s
     }
     lines.push("");
   }
+  lines.push(...verification);
   return lines.join("\n");
 }
