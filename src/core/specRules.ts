@@ -40,9 +40,6 @@ export interface RuleContext {
 
 /* ---------- helpers ---------- */
 
-const hasDir = (ctx: RuleContext, name: string) =>
-  ctx.pkg.files.some((f) => f.path.split("/")[0] === name);
-
 const scripts = (ctx: RuleContext) => ctx.pkg.files.filter((f) => f.path.startsWith("scripts/"));
 
 const bodyLineCount = (ctx: RuleContext) => {
@@ -106,21 +103,6 @@ export const SPEC_RULES: SpecRule[] = [
       if (!root || root === "SKILL" || root.startsWith("粘贴的") || root.startsWith("内置示例")) return null;
       if (root !== ctx.parsed.name) {
         return { message: `frontmatter name「${ctx.parsed.name}」与包根目录名「${root}」不一致，规范要求两者相同。` };
-      }
-      return null;
-    },
-  },
-  {
-    id: "structure.tests-required",
-    category: "structure",
-    severity: "warning",
-    name: "tests/ 目录（企业级必填）",
-    fix:
-      "新建 tests/ 目录，至少放一份评测集（如 tests/cases.jsonl）和一个运行脚本；可直接用 SkillFuse 生成的评测包作为起点。",
-    check(ctx) {
-      if (ctx.pkg.files.length <= 1) return null; // 单文件导入，结构检查受限
-      if (!hasDir(ctx, "tests")) {
-        return { message: "缺少 tests/ 目录。企业级规范要求附带评测集与验证脚本。" };
       }
       return null;
     },
@@ -197,8 +179,26 @@ export const SPEC_RULES: SpecRule[] = [
       if (words.length < 2) {
         return { message: `name「${name}」只有一个词，看不出它对什么做什么，建议补成「领域-动作」。` };
       }
-      if (/^(my|test|demo|temp|new)-|-(helper|tool|util|utils|skill)$/.test(name)) {
+      if (/^(my|test|demo|temp|new|skill)-|-(helper|tool|util|utils|skill)$/.test(name)) {
         return { message: `name「${name}」包含占位或泛化词（my/test/demo/helper/tool/util/skill），表达不了具体职责。` };
+      }
+      return null;
+    },
+  },
+  {
+    id: "naming.dir-name-match",
+    category: "naming",
+    severity: "warning",
+    name: "目录名与 name 一致",
+    fix:
+      "让 skill 目录名、SKILL.md frontmatter 的 name、以及你团队注册表里的登记名三处完全一致——跨 skill 引用与注册表查找都按这个名字走，不一致就会指错。",
+    check(ctx) {
+      const name = ctx.parsed.name;
+      // 单文件 / 粘贴导入没有目录名可比；sourceName 带扩展名的同样不是目录
+      const dir = ctx.pkg.sourceName;
+      if (!name || ctx.pkg.files.length <= 1 || !dir || /\.(md|zip)$/i.test(dir)) return null;
+      if (dir !== name) {
+        return { message: `目录名「${dir}」与 frontmatter 的 name「${name}」不一致。` };
       }
       return null;
     },
