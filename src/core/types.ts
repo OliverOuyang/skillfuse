@@ -22,7 +22,7 @@ export type IssueSeverity = "error" | "warning" | "info";
 
 export type IssueCategory =
   | "structure" // 目录结构
-  | "naming" // 命名规范（skill 名、文件名、脚本名）
+  | "naming" // skill 命名规范
   | "frontmatter" // frontmatter 字段
   | "body" // 正文七段式
   | "io" // 输入输出规范

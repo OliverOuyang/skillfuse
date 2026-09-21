@@ -14,14 +14,7 @@
  */
 
 import type { IssueCategory, IssueSeverity, ParsedSkill, SkillPackage } from "./types";
-import {
-  FILE_SLUG_RE,
-  ORG_PREFIX,
-  SCRIPT_SLUG_RE,
-  SKILL_NAME_RE,
-  isScriptPath,
-  suggestFileNames,
-} from "./naming";
+import { ORG_PREFIX } from "./naming";
 import {
   CANONICAL_SPANS,
   TRACE_EXAMPLE_JSONL,
@@ -98,27 +91,6 @@ export function isReportSkill(ctx: RuleContext): boolean {
 /** 正文里是否出现某类语义（用于报告专项的「有没有写清楚」类检查）。 */
 const bodyHas = (ctx: RuleContext, re: RegExp) => re.test(ctx.pkg.skillMd.content);
 
-/** 文件名（不含目录）。 */
-const baseName = (p: string) => p.split("/").pop() ?? p;
-
-const CANONICAL_FILES = new Set(["SKILL.md", "README.md", "LICENSE", "CHANGELOG.md", ".gitignore"]);
-
-const matchesFileNamingStandard = (path: string): boolean => {
-  const name = baseName(path);
-  if (CANONICAL_FILES.has(name)) return true;
-  return (isScriptPath(path) ? SCRIPT_SLUG_RE : FILE_SLUG_RE).test(name);
-};
-
-/** 合法 kebab-case 脚本只交给更具体的 snake_case 规则，避免两条规则重复报。 */
-const needsScriptSnakeCase = (path: string): boolean =>
-  isScriptPath(path) && FILE_SLUG_RE.test(baseName(path)) && !matchesFileNamingStandard(path);
-
-const hasComparableDir = (ctx: RuleContext): boolean =>
-  Boolean(ctx.parsed.name) &&
-  ctx.pkg.files.length > 1 &&
-  Boolean(ctx.pkg.sourceName) &&
-  !/\.(md|zip)$/i.test(ctx.pkg.sourceName);
-
 const JSON_SCHEMA_HINT = /"properties"\s*:|"type"\s*:\s*"object"|json schema/i;
 
 const allCodeBlocks = (ctx: RuleContext) => ctx.parsed.sections.flatMap((section) => section.codeBlocks);
@@ -150,23 +122,6 @@ const extractStepNames = (ctx: RuleContext): string[] => {
 
 export const SPEC_RULES: SpecRule[] = [
   /* ===== structure ===== */
-  {
-    id: "structure.name-dir-match",
-    category: "structure",
-    severity: "warning",
-    name: "name 与目录名一致",
-    fix:
-      "把 frontmatter 的 name 改成与包根目录同名，或重命名目录：两者一致后工具链才能按 name 定位 skill 资源。",
-    applies: (ctx) => !hasComparableDir(ctx),
-    check(ctx) {
-      const root = ctx.pkg.sourceName.replace(/\.(zip|md|markdown)$/i, "").split("/")[0];
-      if (!root || root === "SKILL" || root.startsWith("粘贴的") || root.startsWith("内置示例")) return null;
-      if (root !== ctx.parsed.name) {
-        return { message: `frontmatter name「${ctx.parsed.name}」与包根目录名「${root}」不一致，规范要求两者相同。` };
-      }
-      return null;
-    },
-  },
   {
     id: "structure.body-too-long",
     category: "structure",
@@ -207,134 +162,47 @@ export const SPEC_RULES: SpecRule[] = [
 
   /* ===== naming ===== */
   {
-    id: "naming.skill-org-prefix",
+    id: "naming.skill-name",
     category: "naming",
-    severity: "warning",
-    name: "skill 名以 loopx- 开头",
-    fix: "把 frontmatter name 改为 loopx-<领域>-<动作>，例如 loopx-eval-runner。",
+    severity: "info",
+    name: "skill 命名规范",
+    fix:
+      "改成 loopx-<领域>-<动作>（3-4 段、全小写连字符），并让目录名与 frontmatter 的 name 完全一致；正例 loopx-eval-runner、loopx-risk-report。",
     check(ctx) {
       const name = str(ctx.parsed.frontmatter.name);
-      if (name && !name.startsWith(`${ORG_PREFIX}-`)) {
-        return { message: `frontmatter name「${name}」未以 loopx- 开头，建议改为 loopx-<领域>-<动作>。` };
+      const problems: string[] = [];
+
+      if (!name) {
+        problems.push("frontmatter 的 name 缺失（实际为「空」）");
+      } else {
+        const kebabCase = /^[a-z0-9]+(-[a-z0-9]+)*$/.test(name);
+        const words = name.split("-").filter(Boolean);
+        const genericWords = words.filter((word) =>
+          /^(my|test|demo|temp|new|helper|tool|util|utils|skill)$/i.test(word),
+        );
+
+        if (!kebabCase) problems.push(`name「${name}」不是全小写连字符格式（kebab-case）`);
+        if (!name.startsWith(`${ORG_PREFIX}-`)) problems.push(`name「${name}」缺 loopx- 前缀`);
+        if (words.length < 3 || words.length > 4) {
+          problems.push(`name「${name}」段数不符：应为 3-4 段，实际 ${words.length} 段`);
+        }
+        if (genericWords.length > 0) {
+          problems.push(`name「${name}」包含泛化词「${genericWords.join("、")}」`);
+        }
+
+        const root = ctx.pkg.sourceName.replace(/\.(zip|md|markdown)$/i, "").split("/")[0];
+        const skipsDirCheck =
+          ctx.pkg.files.length <= 1 ||
+          !root ||
+          root === "SKILL" ||
+          root.startsWith("粘贴的") ||
+          root.startsWith("内置示例");
+        if (!skipsDirCheck && root !== name) {
+          problems.push(`目录名「${root}」与 frontmatter 的 name「${name}」不一致`);
+        }
       }
-      return null;
-    },
-  },
-  {
-    id: "naming.skill-kebab-case",
-    category: "naming",
-    severity: "warning",
-    name: "skill 名用 kebab-case",
-    fix:
-      "把 name 改成全小写、用连字符分词的短名，例如 production-data、weekly-report-writer；不要用下划线、驼峰、空格或中文。",
-    check(ctx) {
-      const name = ctx.parsed.name;
-      if (!name) return null;
-      if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)) {
-        return { message: `name「${name}」不符合 kebab-case（全小写 + 连字符）。` };
-      }
-      return null;
-    },
-  },
-  {
-    id: "naming.skill-name-shape",
-    category: "naming",
-    severity: "info",
-    name: "skill 名是「领域-动作」短名",
-    fix:
-      "使用 loopx-<领域>-<动作>（最多四段），如 loopx-eval-runner、loopx-risk-report；避免 my、test、demo、helper、tool、util、skill 等无信息量词。",
-    applies: (ctx) => ctx.parsed.name.startsWith(`${ORG_PREFIX}-`),
-    check(ctx) {
-      const name = ctx.parsed.name;
-      if (!name) return null;
-      const words = name.split("-").filter(Boolean);
-      // 泛化词表沿用上游 #9（含 temp/new/utils）；段数与长度由 SKILL_NAME_RE 更严格地兜住
-      if (words.some((word) => /^(my|test|demo|temp|new|helper|tool|util|utils|skill)$/.test(word))) {
-        return { message: `name「${name}」包含占位或泛化词（my/test/demo/helper/tool/util/skill），表达不了具体职责。` };
-      }
-      if (!SKILL_NAME_RE.test(name)) {
-        return { message: `name「${name}」不符合 loopx-<领域>-<动作>：必须为三段、最多四段的小写字母数字短名。正例：loopx-eval-runner、loopx-risk-report。` };
-      }
-      return null;
-    },
-  },
-  {
-    id: "naming.dir-name-match",
-    category: "naming",
-    severity: "warning",
-    name: "目录名与 name 一致",
-    fix:
-      "让 skill 目录名、SKILL.md frontmatter 的 name、以及你团队注册表里的登记名三处完全一致——跨 skill 引用与注册表查找都按这个名字走，不一致就会指错。",
-    check(ctx) {
-      const name = ctx.parsed.name;
-      // 单文件 / 粘贴导入没有目录名可比；sourceName 带扩展名的同样不是目录
-      const dir = ctx.pkg.sourceName;
-      if (!name || ctx.pkg.files.length <= 1 || !dir || /\.(md|zip)$/i.test(dir)) return null;
-      if (dir !== name) {
-        return {
-          message: `目录名「${dir}」与 frontmatter 的 name「${name}」不一致。`,
-          fix: "让 skill 目录名与 SKILL.md frontmatter 的 name 完全一致，并同步更新团队注册表里的登记名。",
-        };
-      }
-      // 目录名同时要满足 LoopX 命名：注册表按这个名字查，命名不规范会让检索失准
-      if (!SKILL_NAME_RE.test(dir)) {
-        return {
-          message: `目录名「${dir}」不符合 loopx-<领域>-<动作>（最多四段）。`,
-          fix: "把目录名改成 loopx-<领域>-<动作>，并同步改 frontmatter 的 name。",
-        };
-      }
-      return null;
-    },
-  },
-  {
-    id: "naming.file-portable",
-    category: "naming",
-    severity: "warning",
-    name: "文件名可移植",
-    fix:
-      "普通文件名只用小写字母、数字和连字符并保留单个扩展名；脚本继续使用 snake_case。重命名后同步更新正文中的引用路径。",
-    check(ctx) {
-      if (ctx.pkg.files.length <= 1) return null;
-      const bad = ctx.pkg.files
-        .map((f) => f.path)
-        .filter((p) => !matchesFileNamingStandard(p) && !needsScriptSnakeCase(p));
-      if (bad.length > 0) {
-        const suggested = suggestFileNames(bad);
-        const suggestions = bad.slice(0, 5).map((path, index) => `${path} → ${suggested[index]}`);
-        return { message: `文件名不符合可移植规范：${suggestions.join("；")}${bad.length > 5 ? `；等 ${bad.length} 个` : ""}。` };
-      }
-      return null;
-    },
-  },
-  {
-    id: "naming.script-snake-case",
-    category: "naming",
-    severity: "info",
-    name: "脚本名用 snake_case",
-    fix: "scripts/ 下的可执行脚本统一用 snake_case（如 fetch_orders.py），与 Python / shell 生态惯例一致。",
-    check(ctx) {
-      const bad = scripts(ctx)
-        .map((f) => f.path)
-        .filter((path) => /\.(py|sh)$/.test(path) && needsScriptSnakeCase(path))
-        .map(baseName);
-      if (bad.length > 0) return { message: `scripts/ 下这些脚本不是 snake_case：${bad.join("、")}。` };
-      return null;
-    },
-  },
-  {
-    id: "naming.no-version-in-filename",
-    category: "naming",
-    severity: "info",
-    name: "文件名不带版本 / 状态后缀",
-    fix:
-      "把 v2、final、new、copy、备份 这类后缀从文件名里去掉——版本交给 git 与 CHANGELOG.md，文件名只表达职责。",
-    check(ctx) {
-      if (ctx.pkg.files.length <= 1) return null;
-      const bad = ctx.pkg.files
-        .map((f) => baseName(f.path))
-        .filter((n) => /([_\-.]|^)(v\d+(\.\d+)*|final|new|old|copy|bak|backup|测试|备份|最终|副本)([_\-.]|$)/i.test(n.replace(/\.[a-z0-9]+$/i, "")));
-      if (bad.length > 0) return { message: `以下文件名带版本或状态后缀：${bad.slice(0, 5).join("、")}。` };
-      return null;
+
+      return problems.length > 0 ? { message: `${problems.join("；")}。` } : null;
     },
   },
 
