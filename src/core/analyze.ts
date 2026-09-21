@@ -102,6 +102,7 @@ export function analyzeSkill(skill: ParsedSkill): SkillAnalysis {
       .map((b) => b.replace(/\(.*?\)/g, "").trim())
       .filter((b) => b.length > 2 && b.length < 60),
   ).slice(0, 8);
+  const deliversFile = /保存到|输出到|写入(文件)?|生成.*\.(html|md|xlsx|pptx|docx|pdf)|output_path|文件路径/i.test(text);
 
   const warnings: string[] = [];
   if (!skill.frontmatter.name) warnings.push("frontmatter 缺少 name 字段");
@@ -123,6 +124,7 @@ export function analyzeSkill(skill: ParsedSkill): SkillAnalysis {
     examples,
     outputSections,
     outputFields,
+    deliversFile,
     warnings,
   };
 }

@@ -11,6 +11,8 @@ export function runRuleChecks(rules: RuleCheck[], output: string): RuleResult[] 
 /** 某条规则没过时，给一句「怎么改」——试运行页直接展示。 */
 export function ruleFixHint(rule: RuleCheck): string {
   const p = rule.params ?? {};
+  if (rule.id === "html_skeleton") return "补齐 <html> 与 <body> 根结构，交付完整 HTML 文档。";
+  if (rule.id === "no_external_script") return "移除远程 script src，把所需脚本内联，确保报告离线可打开。";
   switch (rule.kind) {
     case "non_empty":
       return "输出为空，先确认 skill 真的产出了内容。";

@@ -100,7 +100,45 @@ export interface SkillAnalysis {
   outputSections: string[];
   /** concrete fields the deliverable must contain (bullets under output-format sections) */
   outputFields: string[];
+  /** 是否要求把交付物写入文件 */
+  deliversFile: boolean;
   warnings: string[];
+}
+
+export type ContractFormat = "markdown" | "html" | "json" | "text";
+export type FactStatus = "pending" | "confirmed";
+
+export interface ContractFact {
+  /** 指标名，例如「通过率」「申请量」 */
+  name: string;
+  /** 业务确认的期望值；pending 时为 null */
+  value: number | string | null;
+  /** 数值型指标的绝对误差容忍度 */
+  tolerance?: number;
+  /** 单位提示，例如 "%"、"万元"；用于数值归一 */
+  unit?: string;
+  status: FactStatus;
+}
+
+export interface ContractTableSpec {
+  /** 必备列名；空数组表示只要求「存在表格」 */
+  columns: string[];
+}
+
+export interface AcceptanceContract {
+  format: ContractFormat;
+  /** structure = facts 全为 pending，只判结构；facts = 关键数据已由业务确认，硬判数值 */
+  verification_level: "structure" | "facts";
+  required_sections: string[];
+  required_tables: ContractTableSpec[];
+  facts: ContractFact[];
+  /** 必须出现的结论性表述（子串匹配） */
+  required_statements: string[];
+  must_include: string[];
+  must_not_include: string[];
+  /** HTML 交付物：禁止引用外部脚本 / 样式 / 图片，保证离线可打开 */
+  forbid_external_scripts: boolean;
+  notes: string;
 }
 
 export interface DatasetItem {
