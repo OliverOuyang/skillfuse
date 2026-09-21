@@ -14,6 +14,14 @@
  */
 
 import type { IssueCategory, IssueSeverity, ParsedSkill, SkillPackage } from "./types";
+import { FILE_SLUG_RE, ORG_PREFIX, SKILL_NAME_RE, suggestFileName } from "./naming";
+import {
+  CANONICAL_SPANS,
+  TRACE_EXAMPLE_JSONL,
+  TRACE_HELPER_PY,
+  TRACE_SECTION_MD,
+  TRACE_STEP_SCHEMA,
+} from "./traceContract";
 
 export interface RuleHit {
   message: string;
@@ -28,6 +36,8 @@ export interface SpecRule {
   name: string;
   /** 违规时给出的可执行修复建议（展示在检查页的「怎么修」里） */
   fix: string;
+  /** 可直接复制到 skill 包中的修复示例 */
+  example?: { lang: string; code: string; filename?: string };
   /** 仅对部分 skill 生效的规则（如策略报告专项）；返回 false 时该规则不计入总数 */
   applies?(ctx: RuleContext): boolean;
   check(ctx: RuleContext): RuleHit | null;
@@ -82,10 +92,32 @@ const bodyHas = (ctx: RuleContext, re: RegExp) => re.test(ctx.pkg.skillMd.conten
 /** 文件名（不含目录）。 */
 const baseName = (p: string) => p.split("/").pop() ?? p;
 
-const SPAN_PATTERNS =
-  /skill\.(activate|load|run_script)|tool\.execute|guardrail\.check|human\.review|gen_ai\.skill\.|otel|opentelemetry/i;
-const TRACE_WORDS = /trace|span|埋点|可观测|observability|结构化日志|structured log/i;
 const JSON_SCHEMA_HINT = /"properties"\s*:|"type"\s*:\s*"object"|json schema/i;
+
+const allCodeBlocks = (ctx: RuleContext) => ctx.parsed.sections.flatMap((section) => section.codeBlocks);
+
+const parseTraceLines = (content: string) =>
+  content
+    .split(/\r?\n/)
+    .map((line) => {
+      try {
+        const value: unknown = JSON.parse(line.trim());
+        if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+        const record = value as Record<string, unknown>;
+        return typeof record.step === "string" && typeof record.status === "string" ? record : null;
+      } catch {
+        return null;
+      }
+    })
+    .filter((record): record is Record<string, unknown> => record !== null);
+
+const extractStepNames = (ctx: RuleContext): string[] => {
+  const text = [ctx.pkg.skillMd.content, ...scripts(ctx).map((file) => file.content)].join("\n");
+  const names = new Set<string>();
+  for (const match of text.matchAll(/["']step["']\s*:\s*["']([^"']+)["']/g)) names.add(match[1]);
+  for (const match of text.matchAll(/emit_step\s*\(\s*["']([^"']+)["']/g)) names.add(match[1]);
+  return [...names];
+};
 
 /* ---------- rules ---------- */
 
@@ -128,7 +160,7 @@ export const SPEC_RULES: SpecRule[] = [
     severity: "info",
     name: "顶层文件/目录职责清晰",
     fix:
-      "把这些文件归入 scripts/（可执行）、references/（按需加载的文档）、assets/（模板与静态资源）或 tests/（评测），顶层只保留规范定义的项。",
+      "把这些文件归入 scripts/（可执行）、references/（按需加载的文档）、assets/（模板与静态资源）或 tests/（评测）；明确把 docs/ 改到 references/、src/ 改到 scripts/，顶层只保留规范定义的项。",
     check(ctx) {
       if (ctx.pkg.files.length <= 1) return null;
       const unknown = [
@@ -146,6 +178,20 @@ export const SPEC_RULES: SpecRule[] = [
   },
 
   /* ===== naming ===== */
+  {
+    id: "naming.skill-org-prefix",
+    category: "naming",
+    severity: "warning",
+    name: "skill 名以 loopx- 开头",
+    fix: "把 frontmatter name 改为 loopx-<领域>-<动作>，例如 loopx-eval-runner。",
+    check(ctx) {
+      const name = str(ctx.parsed.frontmatter.name);
+      if (name && !name.startsWith(`${ORG_PREFIX}-`)) {
+        return { message: `frontmatter name「${name}」未以 loopx- 开头，建议改为 loopx-<领域>-<动作>。` };
+      }
+      return null;
+    },
+  },
   {
     id: "naming.skill-kebab-case",
     category: "naming",
@@ -168,19 +214,17 @@ export const SPEC_RULES: SpecRule[] = [
     severity: "info",
     name: "skill 名是「领域-动作」短名",
     fix:
-      "用 2–4 个词描述「对什么做什么」，如 sales-weekly-report、csv-data-cleaner；避免 helper、tool、my-skill 这类没有信息量的词，也不要长到像一句话。",
+      "使用 loopx-<领域>-<动作>（最多四段），如 loopx-eval-runner、loopx-risk-report；避免 my、test、demo、helper、tool、util、skill 等无信息量词。",
     check(ctx) {
       const name = ctx.parsed.name;
       if (!name) return null;
       const words = name.split("-").filter(Boolean);
-      if (words.length > 5 || name.length > 40) {
-        return { message: `name「${name}」过长（${words.length} 个词 / ${name.length} 字符），建议收敛到 2–4 个词。` };
-      }
-      if (words.length < 2) {
-        return { message: `name「${name}」只有一个词，看不出它对什么做什么，建议补成「领域-动作」。` };
-      }
-      if (/^(my|test|demo|temp|new|skill)-|-(helper|tool|util|utils|skill)$/.test(name)) {
+      // 泛化词表沿用上游 #9（含 temp/new/utils）；段数与长度由 SKILL_NAME_RE 更严格地兜住
+      if (words.some((word) => /^(my|test|demo|temp|new|helper|tool|util|utils|skill)$/.test(word))) {
         return { message: `name「${name}」包含占位或泛化词（my/test/demo/helper/tool/util/skill），表达不了具体职责。` };
+      }
+      if (!SKILL_NAME_RE.test(name)) {
+        return { message: `name「${name}」不符合 loopx-<领域>-<动作>：必须为三段、最多四段的小写字母数字短名。正例：loopx-eval-runner、loopx-risk-report。` };
       }
       return null;
     },
@@ -200,6 +244,10 @@ export const SPEC_RULES: SpecRule[] = [
       if (dir !== name) {
         return { message: `目录名「${dir}」与 frontmatter 的 name「${name}」不一致。` };
       }
+      // 目录名同时要满足 LoopX 命名：注册表按这个名字查，命名不规范会让检索失准
+      if (!SKILL_NAME_RE.test(dir)) {
+        return { message: `目录名「${dir}」不符合 loopx-<领域>-<动作>（最多四段）。` };
+      }
       return null;
     },
   },
@@ -209,14 +257,21 @@ export const SPEC_RULES: SpecRule[] = [
     severity: "warning",
     name: "文件名可移植",
     fix:
-      "文件名只用小写字母、数字、连字符或下划线：空格与中文在跨平台同步、CI 和 shell 里都容易出问题，重命名后同步更新正文中的引用路径。",
+      "普通文件名只用小写字母、数字和连字符并保留单个扩展名；脚本继续使用 snake_case。重命名后同步更新正文中的引用路径。",
     check(ctx) {
       if (ctx.pkg.files.length <= 1) return null;
+      const canonical = new Set(["SKILL.md", "README.md", "LICENSE", "CHANGELOG.md", ".gitignore"]);
       const bad = ctx.pkg.files
         .map((f) => f.path)
-        .filter((p) => /[\s]|[一-鿿]|[A-Z]/.test(baseName(p)) && baseName(p) !== "SKILL.md" && baseName(p) !== "README.md" && baseName(p) !== "LICENSE" && baseName(p) !== "CHANGELOG.md");
+        .filter((p) => {
+          const name = baseName(p);
+          if (canonical.has(name)) return false;
+          if (p.startsWith("scripts/") && /^[a-z0-9]+(?:_[a-z0-9]+)*\.[a-z0-9]+$/.test(name)) return false;
+          return !FILE_SLUG_RE.test(name);
+        });
       if (bad.length > 0) {
-        return { message: `以下文件名包含空格、中文或大写字母：${bad.slice(0, 5).join("、")}${bad.length > 5 ? ` 等 ${bad.length} 个` : ""}。` };
+        const suggestions = bad.slice(0, 5).map((path) => `${path} → ${suggestFileName(path)}`);
+        return { message: `文件名不符合可移植规范：${suggestions.join("；")}${bad.length > 5 ? `；等 ${bad.length} 个` : ""}。` };
       }
       return null;
     },
@@ -601,38 +656,99 @@ export const SPEC_RULES: SpecRule[] = [
 
   /* ===== trace（中间步骤 / 可观测性） ===== */
   {
+    id: "trace.contract-file",
+    category: "trace",
+    severity: "warning",
+    name: "trace 契约文件",
+    fix: "新增 references/trace-schema.json，或在 SKILL.md 的 JSON Schema 代码块中同时定义 step 与 status 属性。",
+    example: { lang: "json", code: TRACE_STEP_SCHEMA, filename: "references/trace-schema.json" },
+    check(ctx) {
+      const hasFile = ctx.pkg.files.some((file) => /(^|\/)references\/trace-schema\.json$/i.test(file.path));
+      const hasInlineSchema = allCodeBlocks(ctx).some(
+        (block) =>
+          /^(json|jsonschema|schema)$/i.test(block.lang) &&
+          /"properties"\s*:/.test(block.code) &&
+          /"step"\s*:/.test(block.code) &&
+          /"status"\s*:/.test(block.code),
+      );
+      return hasFile || hasInlineSchema
+        ? null
+        : { message: "未找到 references/trace-schema.json，也未在 SKILL.md 中找到同时定义 step 与 status 的 JSON Schema 代码块。" };
+    },
+  },
+  {
+    id: "trace.example-present",
+    category: "trace",
+    severity: "warning",
+    name: "trace 示例轨迹",
+    fix: "新增 references/trace-example.jsonl，至少记录 3 个含 step 与 status 的步骤，并覆盖 fail 或 skip 路径。",
+    example: { lang: "json", code: TRACE_EXAMPLE_JSONL, filename: "references/trace-example.jsonl" },
+    check(ctx) {
+      const files = ctx.pkg.files.filter((file) => /(^|\/)references\/trace-example\.jsonl$/i.test(file.path));
+      const blocks = allCodeBlocks(ctx).filter((block) => /^(jsonl|json)$/i.test(block.lang));
+      const candidates = [...files.map((file) => file.content), ...blocks.map((block) => block.code)];
+      if (candidates.length === 0) {
+        return { message: "完全没有 trace 示例；需要提供 JSONL 文件或 SKILL.md 中的 jsonl/json 代码块。" };
+      }
+      const records = candidates.flatMap(parseTraceLines);
+      if (records.length >= 3 && records.some((record) => record.status !== "ok")) return null;
+      if (records.length >= 3) {
+        return { message: "trace 示例里只有成功路径；至少补一条 status 为 fail 或 skip 的失败/回退记录。" };
+      }
+      return { message: `trace 示例不完整：只有 ${records.length} 行可解析且含 step、status，至少需要 3 行。` };
+    },
+  },
+  {
     id: "trace.span-declared",
     category: "trace",
     severity: "info",
     name: "trace 中间步骤声明",
     fix:
       "在正文里声明埋点约定：skill.activate / skill.load / skill.run_script / tool.execute / guardrail.check / human.review，并注明 gen_ai.skill.* 属性。",
+    example: { lang: "markdown", code: TRACE_SECTION_MD, filename: "SKILL.md" },
     check(ctx) {
-      const allText =
-        ctx.pkg.skillMd.content + "\n" + ctx.pkg.files.map((f) => f.content).join("\n");
-      if (!SPAN_PATTERNS.test(allText) && !TRACE_WORDS.test(allText)) {
-        return { message: "未声明 trace 中间步骤规范。企业级可观测性建议声明 skill.activate / skill.load / skill.run_script / tool.execute / guardrail.check / human.review 等 span 或 gen_ai.skill.* 属性。" };
-      }
-      return null;
+      const allText = [ctx.pkg.skillMd.content, ...ctx.pkg.files.map((file) => file.content)].join("\n");
+      const declared = CANONICAL_SPANS.filter((span) => allText.includes(span));
+      const missing = CANONICAL_SPANS.filter((span) => !declared.includes(span));
+      return declared.length >= 3
+        ? null
+        : { message: `只声明了 ${declared.length} 个标准 span，至少需要 3 个；缺失：${missing.join("、")}。` };
     },
   },
   {
     id: "trace.structured-steps",
     category: "trace",
-    severity: "info",
+    severity: "warning",
     name: "脚本输出结构化步骤",
     fix:
       "让脚本每完成一步就打印一行 JSON（含 step、status、耗时等字段），trace 回放与失败归因会容易得多。",
+    example: { lang: "python", code: TRACE_HELPER_PY, filename: "scripts/trace_emit.py" },
+    // 没有 scripts/ 的纯提示词 skill 无步骤可埋点，不参评（既不误报也不虚高得分）
+    applies: (ctx) => scripts(ctx).length > 0,
     check(ctx) {
       const sc = scripts(ctx);
-      if (sc.length === 0) return null;
-      const structured = sc.filter(
-        (f) => /json\.dumps|json\.dump|print\(json|console\.log\(JSON/i.test(f.content),
+      const structured = sc.some(
+        (file) =>
+          /emit_step\s*\(/.test(file.content) ||
+          /(?:json\.dumps|print\s*\(\s*json|console\.log\s*\(\s*JSON)[\s\S]{0,300}["']step["']/.test(file.content),
       );
-      if (structured.length === 0) {
+      if (!structured) {
         return { message: "scripts/ 脚本未见结构化（JSON）步骤输出。建议每步输出带 step 字段的 JSON，便于 trace 回放与失败归因。" };
       }
       return null;
+    },
+  },
+  {
+    id: "trace.steps-consistent",
+    category: "trace",
+    severity: "info",
+    name: "step 名与契约一致",
+    fix: "把脚本与 SKILL.md 中的 step 名改为 trace 契约定义的标准 span。",
+    check(ctx) {
+      const names = extractStepNames(ctx);
+      if (names.length === 0) return null;
+      const unknown = names.filter((name) => !CANONICAL_SPANS.includes(name));
+      return unknown.length > 0 ? { message: `发现契约外的 step 名：${unknown.join("、")}。` } : null;
     },
   },
 

@@ -248,17 +248,17 @@ export function emitLoopxReadme(skillName: string, exported: LoopxExport, thresh
 
 | 文件 | 内容 |
 |---|---|
-| \`loopx_cases.json\` | ${exported.cases.length} 条正式案例（已带业务确认的标准答案） |
-| \`loopx_structural_cases.json\` | ${exported.structuralOnly.length} 条结构判定案例（尚无标准答案，只判结构） |
+| \`loopx-cases.json\` | ${exported.cases.length} 条正式案例（已带业务确认的标准答案） |
+| \`loopx-structural-cases.json\` | ${exported.structuralOnly.length} 条结构判定案例（尚无标准答案，只判结构） |
 | \`loopx_evaluator.py\` | 自定义代码评分器，加权分 ≥ ${threshold} 判为 task_completed |
-| \`loopx_manifest.json\` | 每条案例的来源、标签与分流原因（本地留痕，不要粘给助手） |
+| \`loopx-manifest.json\` | 每条案例的来源、标签与分流原因（本地留痕，不要粘给助手） |
 
 助手的业务 JSON 字段是封闭的——只认 \`task\` / \`constraints\` / \`expected_result\`，
 多一个键会被 \`normalize_evaluation_materials\` 拒绝，所以条目 metadata 单独放在 manifest 里。
 
 ## 用法（在 Claude Code 中）
 
-1. 粘贴 \`loopx_cases.json\`：
+1. 粘贴 \`loopx-cases.json\`：
    > 将这些材料整理为 \`${skillName}\` 的评测案例，追加到已选数据集；列出缺项、重复或冲突，先不要保存。
 2. 需要规则判定时再粘贴 \`loopx_evaluator.py\`：
    > 这套案例使用自定义代码规则判定，代码如下……请展示案例和规则的变更预览。

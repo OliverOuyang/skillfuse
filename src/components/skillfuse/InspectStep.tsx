@@ -20,7 +20,7 @@ import type {
   ValidationReport,
 } from "@/core/types";
 import { reportToMarkdown } from "@/core/validate";
-import { Badge, Button, Card, Collapsible, EmptyState, ScoreRing, SectionLabel, Segmented } from "@/components/ui";
+import { Badge, Button, Card, Collapsible, CopyIconButton, EmptyState, ScoreRing, SectionLabel, Segmented } from "@/components/ui";
 import { SEVERITY_ICON } from "@/components/ui/severity";
 import { useToast } from "@/components/ui/toast-context";
 import { downloadText } from "./download";
@@ -404,12 +404,29 @@ function IssueRow({ issue }: { issue: ValidationIssue }) {
           <ChevronDown className={cn("h-4 w-4 text-muted-foreground transition-transform", !open && "-rotate-90")} />
         </span>
       </button>
-      {open && issue.hint && (
+      {open && (issue.hint || issue.example) && (
         <div className="border-t bg-muted/40 px-4 py-3">
-          <p className="mb-1 flex items-center gap-1.5 text-[11.5px] font-semibold text-foreground">
-            <Lightbulb className="h-3.5 w-3.5 text-primary" /> 怎么修
-          </p>
-          <p className="text-[12.5px] leading-relaxed text-muted-foreground">{issue.hint}</p>
+          {issue.hint && (
+            <>
+              <p className="mb-1 flex items-center gap-1.5 text-[11.5px] font-semibold text-foreground">
+                <Lightbulb className="h-3.5 w-3.5 text-primary" /> 怎么修
+              </p>
+              <p className="text-[12.5px] leading-relaxed text-muted-foreground">{issue.hint}</p>
+            </>
+          )}
+          {issue.example && (
+            <div className="mt-3 overflow-hidden rounded-lg border bg-card">
+              <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
+                <span className="font-code text-[11px] text-muted-foreground">
+                  {issue.example.filename ?? `示例.${issue.example.lang}`}
+                </span>
+                <CopyIconButton text={issue.example.code} label="复制代码" />
+              </div>
+              <pre className="max-h-80 overflow-auto p-3 text-[11px] leading-relaxed">
+                <code>{issue.example.code}</code>
+              </pre>
+            </div>
+          )}
         </div>
       )}
     </Card>

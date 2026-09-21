@@ -55,6 +55,7 @@ export function validateSkillPackage(pkg: SkillPackage, parsed: ParsedSkill): Va
       category: rule.category,
       message: hit.message,
       hint: rule.fix,
+      example: rule.example,
     });
     if (severity === "error") byCategory[rule.category].errors += 1;
     else if (severity === "warning") byCategory[rule.category].warnings += 1;
@@ -119,6 +120,10 @@ export function reportToMarkdown(report: ValidationReport, skillName: string): s
       lines.push(`- ${icon[i.severity]} **${i.ruleName}** \`${i.ruleId}\``);
       lines.push(`  - 问题：${i.message}`);
       if (i.hint) lines.push(`  - 怎么修：${i.hint}`);
+      if (i.example) {
+        if (i.example.filename) lines.push(`  - 建议文件：\`${i.example.filename}\``);
+        lines.push("", `\`\`\`${i.example.lang}`, i.example.code, "```");
+      }
     }
     lines.push("");
   }

@@ -40,6 +40,8 @@ export interface ValidationIssue {
   message: string;
   /** 可执行的修复建议 */
   hint?: string;
+  /** 可直接复制到 skill 包中的修复示例 */
+  example?: { lang: string; code: string; filename?: string };
   /** 关联文件路径；缺省表示 SKILL.md */
   filePath?: string;
 }

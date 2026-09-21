@@ -108,10 +108,10 @@ SKILL.md ──► parseSkill    解析 frontmatter 与章节（js-yaml）
 
 | 文件 | 作用 |
 | --- | --- |
-| `loopx_cases.json` | SH-LoopX 评测助手正式案例（已补标准答案的条目） |
-| `loopx_structural_cases.json` | 结构判定案例（尚无标准答案，只由规则评分器判结构） |
+| `loopx-cases.json` | SH-LoopX 评测助手正式案例（已补标准答案的条目） |
+| `loopx-structural-cases.json` | 结构判定案例（尚无标准答案，只由规则评分器判结构） |
 | `loopx_evaluator.py` | 助手侧自定义代码评分器，把加权规则分压成 `task_completed` |
-| `loopx_manifest.json` | 每条案例的来源与分流原因（本地留痕，不提交给助手） |
+| `loopx-manifest.json` | 每条案例的来源与分流原因（本地留痕，不提交给助手） |
 
 案例本体只含 `task` / `constraints` / `expected_result` 三个字段——助手的
 `normalize_evaluation_materials` 不接受多余字段。保存仍需在助手里走 preview → 人工确认。

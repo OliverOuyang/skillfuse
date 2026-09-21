@@ -140,9 +140,9 @@ async function main() {
 
   if (format === "loopx") {
     const exported = toLoopxCases(items);
-    outputs["loopx_cases.json"] = JSON.stringify(exported.cases, null, 2);
-    outputs["loopx_structural_cases.json"] = JSON.stringify(exported.structuralOnly, null, 2);
-    outputs["loopx_manifest.json"] = JSON.stringify(exported.manifest, null, 2);
+    outputs["loopx-cases.json"] = JSON.stringify(exported.cases, null, 2);
+    outputs["loopx-structural-cases.json"] = JSON.stringify(exported.structuralOnly, null, 2);
+    outputs["loopx-manifest.json"] = JSON.stringify(exported.manifest, null, 2);
     outputs["loopx_evaluator.py"] = emitLoopxEvaluatorPy(rules, threshold);
     outputs["loopx_README.md"] = emitLoopxReadme(analysis.skillName, exported, threshold);
     console.log(
@@ -161,7 +161,7 @@ async function main() {
   console.log(`\n完成 → ${outDir}`);
   console.log(
     format === "loopx"
-      ? "下一步：把 loopx_cases.json 粘给 Skill 评测助手预览确认（话术见 loopx_README.md）"
+      ? "下一步：把 loopx-cases.json 粘给 Skill 评测助手预览确认（话术见 loopx_README.md）"
       : "下一步：pip install langfuse openai python-dotenv && cp .env.example .env && python langfuse_config.py",
   );
 }

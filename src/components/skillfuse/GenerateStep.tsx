@@ -173,9 +173,9 @@ export function GenerateStep({
     const exported = toLoopxCases(items);
     const zip = new JSZip();
     const folder = zip.folder(`${analysis.skillName}-loopx`)!;
-    folder.file("loopx_cases.json", JSON.stringify(exported.cases, null, 2));
-    folder.file("loopx_structural_cases.json", JSON.stringify(exported.structuralOnly, null, 2));
-    folder.file("loopx_manifest.json", JSON.stringify(exported.manifest, null, 2));
+    folder.file("loopx-cases.json", JSON.stringify(exported.cases, null, 2));
+    folder.file("loopx-structural-cases.json", JSON.stringify(exported.structuralOnly, null, 2));
+    folder.file("loopx-manifest.json", JSON.stringify(exported.manifest, null, 2));
     folder.file("loopx_evaluator.py", emitLoopxEvaluatorPy(rules, LOOPX_THRESHOLD));
     folder.file("README.md", emitLoopxReadme(analysis.skillName, exported, LOOPX_THRESHOLD));
     const blob = await zip.generateAsync({ type: "blob" });
