@@ -14,7 +14,14 @@
  */
 
 import type { IssueCategory, IssueSeverity, ParsedSkill, SkillPackage } from "./types";
-import { FILE_SLUG_RE, ORG_PREFIX, SKILL_NAME_RE, suggestFileName } from "./naming";
+import {
+  FILE_SLUG_RE,
+  ORG_PREFIX,
+  SCRIPT_SLUG_RE,
+  SKILL_NAME_RE,
+  isScriptPath,
+  suggestFileNames,
+} from "./naming";
 import {
   CANONICAL_SPANS,
   TRACE_EXAMPLE_JSONL,
@@ -26,6 +33,8 @@ import {
 export interface RuleHit {
   message: string;
   severity?: IssueSeverity;
+  /** 一条规则有多种命中原因时，让「怎么修」对上实际问题。 */
+  fix?: string;
 }
 
 export interface SpecRule {
@@ -92,6 +101,24 @@ const bodyHas = (ctx: RuleContext, re: RegExp) => re.test(ctx.pkg.skillMd.conten
 /** 文件名（不含目录）。 */
 const baseName = (p: string) => p.split("/").pop() ?? p;
 
+const CANONICAL_FILES = new Set(["SKILL.md", "README.md", "LICENSE", "CHANGELOG.md", ".gitignore"]);
+
+const matchesFileNamingStandard = (path: string): boolean => {
+  const name = baseName(path);
+  if (CANONICAL_FILES.has(name)) return true;
+  return (isScriptPath(path) ? SCRIPT_SLUG_RE : FILE_SLUG_RE).test(name);
+};
+
+/** 合法 kebab-case 脚本只交给更具体的 snake_case 规则，避免两条规则重复报。 */
+const needsScriptSnakeCase = (path: string): boolean =>
+  isScriptPath(path) && FILE_SLUG_RE.test(baseName(path)) && !matchesFileNamingStandard(path);
+
+const hasComparableDir = (ctx: RuleContext): boolean =>
+  Boolean(ctx.parsed.name) &&
+  ctx.pkg.files.length > 1 &&
+  Boolean(ctx.pkg.sourceName) &&
+  !/\.(md|zip)$/i.test(ctx.pkg.sourceName);
+
 const JSON_SCHEMA_HINT = /"properties"\s*:|"type"\s*:\s*"object"|json schema/i;
 
 const allCodeBlocks = (ctx: RuleContext) => ctx.parsed.sections.flatMap((section) => section.codeBlocks);
@@ -130,6 +157,7 @@ export const SPEC_RULES: SpecRule[] = [
     name: "name 与目录名一致",
     fix:
       "把 frontmatter 的 name 改成与包根目录同名，或重命名目录：两者一致后工具链才能按 name 定位 skill 资源。",
+    applies: (ctx) => !hasComparableDir(ctx),
     check(ctx) {
       const root = ctx.pkg.sourceName.replace(/\.(zip|md|markdown)$/i, "").split("/")[0];
       if (!root || root === "SKILL" || root.startsWith("粘贴的") || root.startsWith("内置示例")) return null;
@@ -215,6 +243,7 @@ export const SPEC_RULES: SpecRule[] = [
     name: "skill 名是「领域-动作」短名",
     fix:
       "使用 loopx-<领域>-<动作>（最多四段），如 loopx-eval-runner、loopx-risk-report；避免 my、test、demo、helper、tool、util、skill 等无信息量词。",
+    applies: (ctx) => ctx.parsed.name.startsWith(`${ORG_PREFIX}-`),
     check(ctx) {
       const name = ctx.parsed.name;
       if (!name) return null;
@@ -242,11 +271,17 @@ export const SPEC_RULES: SpecRule[] = [
       const dir = ctx.pkg.sourceName;
       if (!name || ctx.pkg.files.length <= 1 || !dir || /\.(md|zip)$/i.test(dir)) return null;
       if (dir !== name) {
-        return { message: `目录名「${dir}」与 frontmatter 的 name「${name}」不一致。` };
+        return {
+          message: `目录名「${dir}」与 frontmatter 的 name「${name}」不一致。`,
+          fix: "让 skill 目录名与 SKILL.md frontmatter 的 name 完全一致，并同步更新团队注册表里的登记名。",
+        };
       }
       // 目录名同时要满足 LoopX 命名：注册表按这个名字查，命名不规范会让检索失准
       if (!SKILL_NAME_RE.test(dir)) {
-        return { message: `目录名「${dir}」不符合 loopx-<领域>-<动作>（最多四段）。` };
+        return {
+          message: `目录名「${dir}」不符合 loopx-<领域>-<动作>（最多四段）。`,
+          fix: "把目录名改成 loopx-<领域>-<动作>，并同步改 frontmatter 的 name。",
+        };
       }
       return null;
     },
@@ -260,17 +295,12 @@ export const SPEC_RULES: SpecRule[] = [
       "普通文件名只用小写字母、数字和连字符并保留单个扩展名；脚本继续使用 snake_case。重命名后同步更新正文中的引用路径。",
     check(ctx) {
       if (ctx.pkg.files.length <= 1) return null;
-      const canonical = new Set(["SKILL.md", "README.md", "LICENSE", "CHANGELOG.md", ".gitignore"]);
       const bad = ctx.pkg.files
         .map((f) => f.path)
-        .filter((p) => {
-          const name = baseName(p);
-          if (canonical.has(name)) return false;
-          if (p.startsWith("scripts/") && /^[a-z0-9]+(?:_[a-z0-9]+)*\.[a-z0-9]+$/.test(name)) return false;
-          return !FILE_SLUG_RE.test(name);
-        });
+        .filter((p) => !matchesFileNamingStandard(p) && !needsScriptSnakeCase(p));
       if (bad.length > 0) {
-        const suggestions = bad.slice(0, 5).map((path) => `${path} → ${suggestFileName(path)}`);
+        const suggested = suggestFileNames(bad);
+        const suggestions = bad.slice(0, 5).map((path, index) => `${path} → ${suggested[index]}`);
         return { message: `文件名不符合可移植规范：${suggestions.join("；")}${bad.length > 5 ? `；等 ${bad.length} 个` : ""}。` };
       }
       return null;
@@ -284,8 +314,9 @@ export const SPEC_RULES: SpecRule[] = [
     fix: "scripts/ 下的可执行脚本统一用 snake_case（如 fetch_orders.py），与 Python / shell 生态惯例一致。",
     check(ctx) {
       const bad = scripts(ctx)
-        .map((f) => baseName(f.path))
-        .filter((n) => /\.(py|sh)$/.test(n) && !/^[a-z0-9]+(_[a-z0-9]+)*\.(py|sh)$/.test(n));
+        .map((f) => f.path)
+        .filter((path) => /\.(py|sh)$/.test(path) && needsScriptSnakeCase(path))
+        .map(baseName);
       if (bad.length > 0) return { message: `scripts/ 下这些脚本不是 snake_case：${bad.join("、")}。` };
       return null;
     },
