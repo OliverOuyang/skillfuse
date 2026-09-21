@@ -15,6 +15,8 @@ import {
   Wand2,
 } from "lucide-react";
 import type { Artifacts, DatasetItem, ModelConfig, RuleCheck, RuleResult, SkillAnalysis } from "@/core/types";
+import { normalizeContract } from "@/core/contract";
+import { contractFixHint, runContract, type ContractCheckResult } from "@/core/runContract";
 import { aggregate, ruleFixHint, runRuleChecks } from "@/core/runRules";
 import { JUDGE_DIMENSIONS, type JudgeResult, describeError, runJudge, runSkillTask } from "@/core/llm";
 import {
@@ -99,6 +101,14 @@ export function TestStep({
     [live, sample, rules, manualResults],
   );
   const score = results ? aggregate(results) : 0;
+  const contract = useMemo(() => normalizeContract(items[itemIdx]?.expectedOutput), [items, itemIdx]);
+  const contractResults = useMemo(() => sample.trim() ? runContract(sample, contract) : [], [sample, contract]);
+  const contractSkipped = contractResults.filter((result) => result.status === "skip").length;
+  const taskCompleted = Boolean(
+    results
+    && score >= 1
+    && contractResults.every((result) => result.status !== "fail"),
+  );
   const judgeInput = task.trim() || "（未填写需求）";
 
   const record = useCallback(
@@ -234,7 +244,7 @@ export function TestStep({
       <StepHeading
         kicker="第 4 步 · 试运行"
         title="验证评分器"
-        sub="接入模型后可以直接让它按 skill 跑一条需求，再对结果做规则评分与 LLM 评审；也可以把现成输出粘到左边即时打分——与生成的 rule_scorers.py 是同一套逻辑、同一个分数。"
+        sub="接入模型后可以直接让它按 skill 跑一条需求，再按导出评分器相同的 L1 格式、L2 全局规则和 L3 案例契约判定；也可以把现成输出粘到左边即时检查。"
         right={
           results && (
             <Button variant="secondary" size="sm" onClick={exportReport}>
@@ -385,6 +395,20 @@ export function TestStep({
           ) : (
             <>
               {results && (
+                <Card className={cn("p-4", taskCompleted ? "border-emerald-500/30 bg-emerald-500/5" : "border-destructive/30 bg-destructive/5")}>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge tone={taskCompleted ? "success" : "danger"}>
+                      task_completed = {taskCompleted ? "true" : "false"}
+                    </Badge>
+                    <span className="text-[12.5px] text-muted-foreground">L1 格式、L2 全局规则、L3 案例契约三层判定</span>
+                    <Badge tone={contractSkipped > 0 ? "warning" : "neutral"} className="ml-auto">
+                      {contractSkipped} 条跳过
+                    </Badge>
+                  </div>
+                </Card>
+              )}
+
+              {results && (
                 <Card className="p-4">
                   <div className="flex items-center gap-5">
                     <ScoreRing
@@ -425,6 +449,18 @@ export function TestStep({
                 <div className="space-y-2">
                   {results.map((r) => (
                     <RuleResultRow key={r.id} result={r} rule={rules.find((x) => x.id === r.id)} />
+                  ))}
+                </div>
+              )}
+
+              {results && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2 pt-1">
+                    <SectionLabel>案例契约（L3）</SectionLabel>
+                    {contractSkipped > 0 && <Badge tone="warning">关键数据未核验，待业务补齐</Badge>}
+                  </div>
+                  {contractResults.map((result, index) => (
+                    <ContractResultRow key={`${result.name}-${index}`} result={result} />
                   ))}
                 </div>
               )}
@@ -480,6 +516,27 @@ export function TestStep({
         </Button>
       </StepFooter>
     </div>
+  );
+}
+
+function ContractResultRow({ result }: { result: ContractCheckResult }) {
+  const hint = contractFixHint(result);
+  const tone = result.status === "pass" ? "success" : result.status === "skip" ? "warning" : "danger";
+  const statusLabel = result.status === "pass" ? "通过" : result.status === "skip" ? "跳过" : "失败";
+
+  return (
+    <Card className={cn("p-3.5", result.status === "skip" && "border-amber-500/30 bg-amber-500/5", result.status === "fail" && "border-destructive/30")}>
+      <div className="flex items-start gap-2.5">
+        <Badge tone={tone}>{statusLabel}</Badge>
+        <div className="min-w-0 flex-1">
+          <p className="text-[12.5px] font-medium">{result.name}</p>
+          <p className="font-code text-[11px] text-muted-foreground">
+            {result.status === "skip" ? "关键数据未核验，待业务补齐" : result.comment}
+          </p>
+          {hint && <p className="mt-1.5 text-[12px] font-medium">怎么改：{hint}</p>}
+        </div>
+      </div>
+    </Card>
   );
 }
 

@@ -16,6 +16,11 @@ const BASE_FORBIDDEN = ["TODO", "待补充", "数据暂缺", "示例数据", "�
 const FACT_NAME_RE = /(率|量|额|数|占比|金额|成本|人数|笔数|rate|ratio|count|amount|volume|cost)$|^(ROI|GMV|CTR|CVR|CPA|CPS|LTV)$/i;
 const FORMATS = new Set<ContractFormat>(["markdown", "html", "json", "text"]);
 
+/** 验收层级只由已确认且非空的业务事实决定。 */
+export function verificationLevelOf(facts: ContractFact[]): AcceptanceContract["verification_level"] {
+  return facts.some((fact) => fact.status === "confirmed" && fact.value !== null) ? "facts" : "structure";
+}
+
 const recordOf = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 
@@ -27,13 +32,20 @@ function formatOf(value: unknown, fallback: ContractFormat = "text"): ContractFo
 }
 
 function inferredFormat(formats: string[]): ContractFormat {
-  const first = formats[0]?.toLowerCase();
-  if (first === "report" || first === "markdown") return "markdown";
-  return formatOf(first, "text");
+  for (const value of formats) {
+    const format = value.toLowerCase();
+    if (format === "report" || format === "markdown") return "markdown";
+    if (format === "html" || format === "json") return format;
+  }
+  return "text";
 }
 
 function shortHeading(step: string): string {
   return step.replace(/^\d+[.)、．]\s*/, "").split(/[。；;：:]/, 1)[0].trim().slice(0, 40);
+}
+
+function outputHeading(field: string): string {
+  return field.replace(/[（(][^）)]*[）)]/g, "").replace(/^\s*\d+[.)、．]\s*/, "").trim();
 }
 
 function tableColumns(fields: string[]): string[] {
@@ -55,15 +67,18 @@ export function buildContract(
   analysis: SkillAnalysis,
   opts: { format?: ContractFormat } = {},
 ): AcceptanceContract {
-  const format = opts.format ?? inferredFormat(analysis.formats);
-  const requiredSections = (
-    analysis.outputSections.length > 0
-      ? analysis.outputSections
-      : analysis.steps.slice(0, 5).map(shortHeading).filter(Boolean)
+  const inferred = inferredFormat(analysis.formats);
+  const format = opts.format ?? inferred;
+  const outputFields = analysis.outputFields
+    .map(outputHeading)
+    .filter((field) => field.length > 0 && field.length <= 40);
+  const requiredSections = (outputFields.length > 0
+    ? outputFields
+    : analysis.steps.map(shortHeading).filter(Boolean)
   ).slice(0, 8);
-  const factNames = [...analysis.outputFields, ...analysis.outputSections]
+  const factNames = outputFields
     .flatMap((field) => field.split(/[、,，|｜/：:]/))
-    .map((field) => field.replace(/[（(].*?[）)]/g, "").trim())
+    .map((field) => field.trim())
     .filter((field) => FACT_NAME_RE.test(field));
   const facts: ContractFact[] = [...new Set(factNames.map((name) => name.toLowerCase()))]
     .map((key) => factNames.find((name) => name.toLowerCase() === key)!)
@@ -76,6 +91,9 @@ export function buildContract(
     "关键指标数值需由业务从已确认的 SQL/报表补齐后才会硬判。",
     ...(analysis.deliversFile
       ? ["文件型交付物必须在最终回复中内联完整报告全文，否则评测器拿不到内容无法评分。"]
+      : []),
+    ...(opts.format === undefined && inferred === "text"
+      ? ["该 skill 的交付物是二进制/非文本格式，评测器只能看到最终回复的文本，L1 格式校验不生效，需要 skill 在回复中内联可校验的内容摘要。"]
       : []),
   ].join(" ");
 
@@ -100,10 +118,12 @@ export function normalizeContract(raw: unknown, fallbackFormat: ContractFormat =
     ? value.facts.flatMap((item): ContractFact[] => {
         const fact = recordOf(item);
         if (typeof fact.name !== "string") return [];
-        const confirmed = fact.status === "confirmed";
+        const factValue = typeof fact.value === "number" || typeof fact.value === "string" ? fact.value : null;
+        const confirmed = fact.status === "confirmed" && factValue !== null
+          && (typeof factValue !== "string" || factValue.trim().length > 0);
         return [{
           name: fact.name,
-          value: typeof fact.value === "number" || typeof fact.value === "string" ? fact.value : null,
+          value: confirmed ? factValue : null,
           ...(typeof fact.tolerance === "number" ? { tolerance: fact.tolerance } : {}),
           ...(typeof fact.unit === "string" ? { unit: fact.unit } : {}),
           status: confirmed ? "confirmed" : "pending",
@@ -113,11 +133,11 @@ export function normalizeContract(raw: unknown, fallbackFormat: ContractFormat =
   const requiredTables = Array.isArray(value.required_tables)
     ? value.required_tables.map((item) => ({ columns: stringsOf(recordOf(item).columns) }))
     : [];
-  const hasConfirmedFacts = facts.some((fact) => fact.status === "confirmed" && fact.value !== null);
+  const verificationLevel = verificationLevelOf(facts);
 
   return {
     format: formatOf(value.format, fallbackFormat),
-    verification_level: hasConfirmedFacts && value.verification_level === "facts" ? "facts" : "structure",
+    verification_level: verificationLevel,
     required_sections: stringsOf(value.required_sections ?? value.reference_outline),
     required_tables: requiredTables,
     facts,

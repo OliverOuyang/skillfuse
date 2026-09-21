@@ -1,4 +1,5 @@
 import type { DatasetItem, ModelConfig, RuleCheck, SkillAnalysis } from "./types";
+import { normalizeContract } from "./contract";
 import { LLM_PROXY_HEADER, LLM_PROXY_PATH, LLM_TARGET_HEADER } from "./llmProxy";
 
 const DEFAULT_TIMEOUT = 60_000;
@@ -351,6 +352,10 @@ Every check runs locally against the model output text only. Allowed "kind" valu
 - max_length    { "max": number }
 - has_heading | has_table | has_code_block | valid_json | no_emoji | non_empty  { }
 
+For HTML deliverables, preserve or add these two concrete safeguards when applicable:
+- html_skeleton: contains_all with ["<html", "<body"], requiring a complete HTML document.
+- no_external_script: not_contains with a regex matching remote script src, keeping the report offline-safe.
+
 Write name/description/reason in the same language as the skill description.
 Return a JSON array only, each element:
 { "action": "keep|modify|add|drop", "id": string, "name": string, "description": string,
@@ -450,10 +455,18 @@ And add the missing coverage: realistic happy paths,边界 / 异常 inputs, and 
 probe the hard constraints. Aim for 5-10 items in total — quality over quantity.
 
 Write every natural-language field in the same language as the skill description.
+SkillFuse does not know business truth. NEVER invent, estimate, infer, copy, or fabricate metric values.
+SkillFuse 不知道业务真值，严禁编造、估算、推断或复制任何指标数值。
+Every generated fact MUST use value: null and status: "pending". Only a human may later confirm a value.
+自动生成的每条 fact 都必须是 value: null、status: "pending"，只有人工才能确认数值。
 Return a JSON array only, each element:
 { "action": "keep|modify|add|drop", "index": number|null,
   "input": { "task": string, "context": object },
-  "expectedOutput": { "must_include": string[], "must_not_include": string[], "format": string, "notes": string },
+  "expectedOutput": { "format": "markdown|html|json|text", "verification_level": "structure",
+    "required_sections": string[], "required_tables": [{ "columns": string[] }],
+    "facts": [{ "name": string, "value": null, "tolerance": number, "unit": string, "status": "pending" }],
+    "required_statements": string[], "must_include": string[], "must_not_include": string[],
+    "forbid_external_scripts": boolean, "notes": string },
   "metadata": { "section": string, "tags": string[], "difficulty": "basic|intermediate|edge" },
   "reason": "one sentence on why" }
 "index" is required for keep/modify/drop and must refer to an existing item.`;
@@ -492,9 +505,25 @@ Return a JSON array only, each element:
     const input = (row.input as Record<string, unknown>) ?? existing?.input ?? {};
     if (!String((input as { task?: unknown }).task ?? "").trim()) continue;
     if (existing) seen.add(idx);
+    const generatedExpected = row.expectedOutput && typeof row.expectedOutput === "object"
+      ? row.expectedOutput as Record<string, unknown>
+      : null;
+    const expectedOutput = generatedExpected
+      ? normalizeContract({
+          ...generatedExpected,
+          verification_level: "structure",
+          facts: Array.isArray(generatedExpected.facts)
+            ? generatedExpected.facts.map((fact) => ({
+                ...(fact && typeof fact === "object" ? fact : {}),
+                value: null,
+                status: "pending",
+              }))
+            : [],
+        })
+      : existing?.expectedOutput;
     next.push({
       input,
-      expectedOutput: (row.expectedOutput as Record<string, unknown>) ?? existing?.expectedOutput,
+      expectedOutput,
       metadata: {
         ...(existing?.metadata ?? {}),
         ...((row.metadata as Record<string, unknown>) ?? {}),
