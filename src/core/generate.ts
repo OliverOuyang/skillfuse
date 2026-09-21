@@ -1,4 +1,5 @@
 import { PY_RULE_ENGINE } from "./pyRuleEngine";
+import { buildContract } from "./contract";
 import type { Artifacts, DatasetItem, GenerateOptions, RuleCheck, SkillAnalysis } from "./types";
 
 const DAY = new Date().toISOString().slice(0, 10);
@@ -50,11 +51,16 @@ function buildDatasetSchema(a: SkillAnalysis, datasetName: string) {
         context: "object — 可选的附件 / 运行约束",
       },
       expectedOutput: {
+        format: "markdown | html | json | text — 预期输出格式",
+        verification_level: "structure | facts — 结构级或业务事实级验收",
+        required_sections: "string[] — 必备章节标题",
+        required_tables: "{ columns: string[] }[] — 必备表格及列名",
+        facts: "{ name, value, tolerance?, unit?, status }[] — 业务事实；未确认数值必须为 pending/null",
+        required_statements: "string[] — 必须出现的结论性表述",
         must_include: "string[] — 合格输出必须包含的元素",
         must_not_include: "string[] — 合格输出不得包含的元素",
-        format: "string — 预期的输出格式",
-        reference_outline: "string[] — 预期的章节结构（如适用）",
-        notes: "string — 本条目的评分备注",
+        forbid_external_scripts: "boolean — HTML 是否禁止外部脚本、样式和图片",
+        notes: "string — 契约说明",
       },
       metadata: {
         source: "skill-body | skill-example | constraint-adversarial | llm-augmented",
@@ -91,14 +97,11 @@ export function buildDatasetItems(a: SkillAnalysis): DatasetItem[] {
     items.push({
       input: {
         task: synthesizeTask(t, a),
-        context: {},
+        context: datasetContext(a),
       },
       expectedOutput: {
-        must_include: mustInclude(a),
-        must_not_include: mustNotInclude(a),
-        format: a.formats[0] || "markdown",
-        reference_outline: a.outputSections.length > 0 ? a.outputSections : a.steps.slice(0, 5),
-        notes: `基于触发词「${t}」生成的常规条目。在依赖精确匹配评分之前，请先补充具体的参考答案。`,
+        ...buildContract(a),
+        notes: `${buildContract(a).notes} 本条基于触发词「${t}」生成。`,
       },
       metadata: {
         source: "skill-body",
@@ -114,17 +117,16 @@ export function buildDatasetItems(a: SkillAnalysis): DatasetItem[] {
     items.push({
       input: {
         task: `请为 skill「${a.skillName}」产出 skill 示例${ex.caption ? `（${ex.caption}）` : ""}所演示的输出。`,
-        context: { example_language: ex.lang },
+        context: { ...datasetContext(a), example_language: ex.lang },
       },
       expectedOutput: {
-        must_include: ex.code
+        ...buildContract(a),
+        required_statements: ex.code
           .split("\n")
-          .map((l) => l.trim())
-          .filter((l) => l.length > 10)
+          .map((line) => line.trim())
+          .filter((line) => line.length > 10)
           .slice(0, 5),
-        format: ex.lang || a.formats[0] || "text",
-        reference: ex.code.slice(0, 2000),
-        notes: "参考答案逐字取自 skill 正文中的代码块。",
+        notes: `${buildContract(a).notes} 参考代码片段：\n${ex.code.slice(0, 2000)}`,
       },
       metadata: {
         source: "skill-example",
@@ -140,12 +142,11 @@ export function buildDatasetItems(a: SkillAnalysis): DatasetItem[] {
     items.push({
       input: {
         task: `${synthesizeTask(triggers[0], a)}（本次运行专门探测约束：「${c}」）`,
-        context: { probe_constraint: c },
+        context: { ...datasetContext(a), probe_constraint: c },
       },
       expectedOutput: {
-        must_not_include: mustNotInclude(a),
-        format: a.formats[0] || "markdown",
-        notes: `对抗性条目：合格答案必须遵守硬规则「${c}」。`,
+        ...buildContract(a),
+        notes: `${buildContract(a).notes} 对抗性条目必须遵守硬规则「${c}」。`,
       },
       metadata: {
         source: "constraint-adversarial",
@@ -158,11 +159,10 @@ export function buildDatasetItems(a: SkillAnalysis): DatasetItem[] {
 
   if (items.length === 0) {
     items.push({
-      input: { task: `使用「${a.skillName}」skill：${skillRef}`, context: {} },
+      input: { task: `使用「${a.skillName}」skill：${skillRef}`, context: datasetContext(a) },
       expectedOutput: {
-        must_include: mustInclude(a),
-        format: a.formats[0] || "markdown",
-        notes: "兜底条目——未在该 skill 中检测到触发词、示例或约束。",
+        ...buildContract(a),
+        notes: `${buildContract(a).notes} 本条为未检测到触发词、示例或约束时的兜底条目。`,
       },
       metadata: { source: "skill-body", section: "", tags: [a.skillName], difficulty: "basic" },
     });
@@ -171,22 +171,18 @@ export function buildDatasetItems(a: SkillAnalysis): DatasetItem[] {
   return items.slice(0, 8);
 }
 
+function datasetContext(a: SkillAnalysis): Record<string, string> {
+  return a.deliversFile
+    ? { reply_requirement: "在最终回复中内联完整报告全文（不要只返回文件路径），否则评测器拿不到内容无法评分" }
+    : {};
+}
+
 function synthesizeTask(trigger: string, a: SkillAnalysis): string {
   const inputHint = a.inputs.length > 0 ? `（输入：${a.inputs[0]}）` : "";
   return `一位用户提出请求${inputHint}：「${trigger}」。请端到端执行「${a.skillName}」skill，产出其预期交付物。`;
 }
 
-function mustInclude(a: SkillAnalysis): string[] {
-  const out: string[] = [];
-  if (a.outputFields.length > 0) out.push(...a.outputFields.slice(0, 4));
-  else if (a.outputSections.length > 0) out.push(...a.outputSections.slice(0, 4));
-  else if (a.steps.length > 0) out.push(...a.steps.slice(0, 3).map((s) => s.slice(0, 60)));
-  if (a.formats.includes("table")) out.push("一个表格");
-  if (a.formats.includes("code")) out.push("一个代码块");
-  return out;
-}
-
-function mustNotInclude(a: SkillAnalysis): string[] {
+export function mustNotInclude(a: SkillAnalysis): string[] {
   const out: string[] = [];
   for (const c of a.constraints) {
     const quoted = [...c.matchAll(/["'“”`]([^"'“”`]{2,60})["'“”`]/g)].map((m) => m[1]);
@@ -217,6 +213,7 @@ export function isReportDeliverable(a: SkillAnalysis): boolean {
 }
 
 export function buildRuleChecks(a: SkillAnalysis): RuleCheck[] {
+  const htmlOutput = a.formats.includes("html");
   const rules: RuleCheck[] = [
     {
       id: "non_empty",
@@ -249,7 +246,7 @@ export function buildRuleChecks(a: SkillAnalysis): RuleCheck[] {
       source: "声明格式：json",
     });
   }
-  if (a.formats.includes("markdown") || a.formats.includes("report")) {
+  if (!htmlOutput && (a.formats.includes("markdown") || a.formats.includes("report"))) {
     rules.push({
       id: "has_heading",
       name: "包含标题结构",
@@ -260,7 +257,7 @@ export function buildRuleChecks(a: SkillAnalysis): RuleCheck[] {
       source: "声明格式：markdown/report",
     });
   }
-  if (a.formats.includes("table")) {
+  if (!htmlOutput && a.formats.includes("table")) {
     rules.push({
       id: "has_table",
       name: "包含表格",
@@ -281,6 +278,28 @@ export function buildRuleChecks(a: SkillAnalysis): RuleCheck[] {
       weight: 2,
       source: "声明格式：code",
     });
+  }
+  if (a.formats.includes("html")) {
+    rules.push(
+      {
+        id: "html_skeleton",
+        name: "HTML 骨架完整",
+        description: "HTML 报告必须包含 html 与 body 根结构。",
+        kind: "contains_all",
+        params: { terms: ["<html", "<body"] },
+        weight: 2,
+        source: "声明格式：html",
+      },
+      {
+        id: "no_external_script",
+        name: "不引用外部脚本",
+        description: "报告需离线可打开，不得引用远程脚本。",
+        kind: "not_contains",
+        params: { regex: "<script[^>]+src\\s*=\\s*[\"']?(?:https?:)?//" },
+        weight: 3,
+        source: "声明格式：html",
+      },
+    );
   }
 
   // banned terms from never-constraints
