@@ -318,7 +318,7 @@ export function emitLoopxReadme(skillName: string, exported: LoopxExport, thresh
 |---|---|
 | \`loopx-cases.json\` | ${exported.cases.length} 条正式案例（已带业务确认的标准答案） |
 | \`loopx-structural-cases.json\` | ${exported.structuralOnly.length} 条结构判定案例（尚无标准答案，只判结构） |
-| \`loopx_evaluator.py\` | 自定义代码评分器，加权分 ≥ ${threshold} 判为 task_completed |
+| \`loopx_evaluator.py\` | 自定义代码评分器，L1/L2/L3 三层全过才判为 task_completed（见下） |
 | \`loopx-manifest.json\` | 每条案例的来源、标签与分流原因（本地留痕，不要粘给助手） |
 
 助手的业务 JSON 字段是封闭的——只认 \`task\` / \`constraints\` / \`expected_result\`，
