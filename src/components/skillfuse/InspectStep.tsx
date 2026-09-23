@@ -34,6 +34,7 @@ const CATEGORY_META: { key: IssueCategory; label: string; desc: string }[] = [
   { key: "body", label: "正文结构", desc: "何时使用 / 工作流 / 失败回退 / 边界" },
   { key: "io", label: "输入输出", desc: "输入校验与输出格式的字段级定义" },
   { key: "report", label: "报告类专项", desc: "结论先行、数据出处、口径与建议（仅报告类 skill）" },
+  { key: "output", label: "产出规范", desc: "产出目录、版本与台账的落盘约定" },
   { key: "trace", label: "trace 规范", desc: "中间步骤埋点与可观测性" },
   { key: "security", label: "安全基线", desc: "提示注入、外部链接与权限面" },
 ];
