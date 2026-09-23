@@ -101,6 +101,37 @@ export function isReportSkill(ctx: RuleContext): boolean {
 /** 正文里是否出现某类语义（用于报告专项的「有没有写清楚」类检查）。 */
 const bodyHas = (ctx: RuleContext, re: RegExp) => re.test(ctx.pkg.skillMd.content);
 
+const BASELINE_ACTION = /迭代|优化|对比|比较|iterate|optimis|optimiz|compar/i;
+const BASELINE_OUTPUT = /版本|上一版|前一版|基线|产出|重跑|version|baseline|output|rerun/i;
+const SKILL_MAINTENANCE = /维护|开发|贡献|变更记录/i;
+
+const needsBaselineInput = (ctx: RuleContext): boolean => {
+  const relevant = (text: string) => BASELINE_ACTION.test(text) && BASELINE_OUTPUT.test(text);
+  if (relevant(ctx.parsed.description)) return true;
+
+  const body = ctx.pkg.skillMd.content.replace(/^---\s*\r?\n[\s\S]*?\r?\n---\s*\r?\n?/, "");
+  const headings: { depth: number; excluded: boolean }[] = [];
+  let section = "";
+  let excluded = false;
+  for (const line of body.split(/\r?\n/)) {
+    const heading = line.match(/^(#{1,6})\s+(.+)/);
+    if (heading) {
+      const depth = heading[1].length;
+      if (depth <= 2) {
+        if (relevant(section)) return true;
+        section = "";
+      }
+      while (headings.length && headings[headings.length - 1].depth >= depth) headings.pop();
+      excluded = headings.some((item) => item.excluded) || SKILL_MAINTENANCE.test(heading[2]);
+      headings.push({ depth, excluded });
+      if (!excluded) section += `\n${heading[2]}`;
+    } else if (!excluded) {
+      section += `\n${line}`;
+    }
+  }
+  return relevant(section);
+};
+
 const JSON_SCHEMA_HINT = /"properties"\s*:|"type"\s*:\s*"object"|json schema/i;
 
 const allCodeBlocks = (ctx: RuleContext) => ctx.parsed.sections.flatMap((section) => section.codeBlocks);
@@ -647,9 +678,7 @@ export const SPEC_RULES: SpecRule[] = [
     category: "output",
     severity: "warning",
     name: "上一版产出作为基线",
-    applies: (ctx) => /迭代|优化|对比|比较|iterate|optimis|optimiz|compar/i.test(
-      `${ctx.parsed.description} ${ctx.parsed.sections.map((section) => section.heading).join(" ")}`,
-    ),
+    applies: needsBaselineInput,
     fix: `在产出契约中声明迭代、优化或对比时从 ${OUTPUT_ENV_VARS[1]} 读取上一版产出，并说明首次无基线时如何处理。`,
     example: { lang: "markdown", code: OUTPUT_SECTION_MD, filename: "SKILL.md" },
     check(ctx) {
