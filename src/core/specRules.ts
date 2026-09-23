@@ -6,6 +6,7 @@
  *   frontmatter  frontmatter 字段（name / description / license / allowed-tools …）
  *   body         正文七段式（何时使用 / 工作流 / 失败回退 / 输出格式 / 示例 / 边界）
  *   io           输入输出规范（五要素②：JSON Schema / 字段定义）
+ *   output       产出目录、版本与台账规范
  *   trace        trace 中间步骤 / 可观测性规范（skill.* spans、gen_ai.skill.* 属性）
  *   security     安全基线（AST 快速检查）
  *
@@ -15,6 +16,12 @@
 
 import type { IssueCategory, IssueSeverity, ParsedSkill, SkillPackage } from "./types";
 import { ORG_PREFIX } from "./naming";
+import {
+  OUTPUT_DIR_TREE,
+  OUTPUT_ENV_VARS,
+  OUTPUT_SECTION_MD,
+  OUTPUT_VERSION_SUBDIRS,
+} from "./outputContract";
 import {
   CANONICAL_SPANS,
   TRACE_EXAMPLE_JSONL,
@@ -78,6 +85,9 @@ const KNOWN_TOP_LEVEL = new Set([
   ".gitignore",
   ".claude",
 ]);
+
+/** 产出契约可能写在「产出契约」「产出目录」或七段式里标准的「输出格式」节。 */
+const OUTPUT_SECTION_PATTERNS = [/产出契约/, /产出目录/, /输出格式/];
 
 /** 交付物是策略 / 分析报告的 skill——这类 skill 的检查重点不是格式，而是结论能不能被追溯。 */
 export function isReportSkill(ctx: RuleContext): boolean {
@@ -550,6 +560,104 @@ export const SPEC_RULES: SpecRule[] = [
         return { message: `scripts/ 下 ${sc.length} 个脚本都未见输入输出说明。规范要求脚本 IO 有 JSON Schema 或等效契约定义。` };
       }
       return null;
+    },
+  },
+
+  /* ===== output（产出目录与版本规范） ===== */
+  {
+    id: "output.section-declared",
+    category: "output",
+    severity: "warning",
+    name: "声明产出契约章节",
+    fix: "在 SKILL.md 正文新增「## 产出契约」章节，说明主交付物、固定目录、版本与台账。",
+    example: { lang: "markdown", code: OUTPUT_SECTION_MD, filename: "SKILL.md" },
+    check(ctx) {
+      return findSection(ctx, OUTPUT_SECTION_PATTERNS)
+        ? null
+        : { message: "正文缺少「产出契约」或「产出目录」章节。" };
+    },
+  },
+  {
+    id: "output.primary-artifact",
+    category: "output",
+    severity: "warning",
+    name: "唯一主交付物",
+    fix: "在产出契约中指定主交付物的类型和相对路径，并声明成功或部分完成时恰好一件；其余文件标为附属。",
+    example: { lang: "markdown", code: OUTPUT_SECTION_MD, filename: "SKILL.md" },
+    check(ctx) {
+      const section = findSection(ctx, OUTPUT_SECTION_PATTERNS);
+      return section && /主交付物/.test(section.body) && /唯一|恰好一|仅一|只能有一/.test(section.body) &&
+        OUTPUT_VERSION_SUBDIRS.some((dir) => section.body.includes(`${dir}/`))
+        ? null
+        : { message: "产出契约未明确唯一的主交付物。" };
+    },
+  },
+  {
+    id: "output.dir-structure",
+    category: "output",
+    severity: "warning",
+    name: "版本内固定四区",
+    fix: `在产出契约中声明每个版本固定创建 ${OUTPUT_VERSION_SUBDIRS.map((dir) => `${dir}/`).join("、")}，即使为空也保留。`,
+    example: { lang: "markdown", code: OUTPUT_DIR_TREE, filename: "SKILL.md" },
+    check(ctx) {
+      const section = findSection(ctx, OUTPUT_SECTION_PATTERNS);
+      const missing = OUTPUT_VERSION_SUBDIRS.filter((dir) => !section?.body.includes(`${dir}/`));
+      return missing.length === 0
+        ? null
+        : { message: `未声明版本内固定四区，缺少：${missing.map((dir) => `${dir}/`).join("、")}。` };
+    },
+  },
+  {
+    id: "output.no-hardcoded-path",
+    category: "output",
+    severity: "warning",
+    name: "产出路径不硬编码",
+    fix: `把 SKILL.md 与 scripts/ 中写死的产出路径改为从 ${OUTPUT_ENV_VARS[0]} 读取版本目录，再拼接四区内的相对路径。`,
+    example: { lang: "markdown", code: OUTPUT_SECTION_MD, filename: "SKILL.md" },
+    check(ctx) {
+      const files = [ctx.pkg.skillMd, ...scripts(ctx)];
+      const hardcoded = files.find((file) =>
+        /(?:outputs|产出)\/[\w\u4e00-\u9fff./<>-]+\.(?:md|json|jsonl|csv|xlsx|pdf|html|txt|log)\b/i.test(file.content) ||
+        /(?:\/(?:Users|home|tmp|var|workspace|mnt|data)\/|[A-Z]:[\\/])[^\s"'`]+\.(?:md|json|jsonl|csv|xlsx|pdf|html|txt|log)\b/i.test(file.content),
+      );
+      return hardcoded
+        ? { message: `${hardcoded.path} 出现硬编码产出文件路径；应通过 ${OUTPUT_ENV_VARS[0]} 定位版本目录。` }
+        : null;
+    },
+  },
+  {
+    id: "output.version-policy",
+    category: "output",
+    severity: "warning",
+    name: "版本分配与回指",
+    fix: `声明由 runner 分配 v{n}，通过 ${OUTPUT_ENV_VARS[2]} 读取版本号；重跑另开版本，并在台账记录上一版版本号。`,
+    example: { lang: "markdown", code: OUTPUT_SECTION_MD, filename: "SKILL.md" },
+    check(ctx) {
+      // 版本策略常写在「工作流」而非产出契约节，按全文判断避免误判。
+      const body = ctx.pkg.skillMd.content;
+      return /runner|管家|脚本分配|由脚本/.test(body) &&
+        (body.includes("v{n}") || body.includes(OUTPUT_ENV_VARS[2]) || /第\s*N\s*版|版本号.*递增|递增.*版本/.test(body)) &&
+        /上一版|前一版/.test(body)
+        ? null
+        : { message: "未声明由 runner 分配版本号并在新版台账回指上一版。" };
+    },
+  },
+  {
+    id: "output.baseline-input",
+    category: "output",
+    severity: "warning",
+    name: "上一版产出作为基线",
+    applies: (ctx) => /迭代|优化|对比|比较|iterate|optimis|optimiz|compar/i.test(
+      `${ctx.parsed.description} ${ctx.parsed.sections.map((section) => section.heading).join(" ")}`,
+    ),
+    fix: `在产出契约中声明迭代、优化或对比时从 ${OUTPUT_ENV_VARS[1]} 读取上一版产出，并说明首次无基线时如何处理。`,
+    example: { lang: "markdown", code: OUTPUT_SECTION_MD, filename: "SKILL.md" },
+    check(ctx) {
+      // 基线用法同样可能写在工作流节，按全文判断。
+      const body = ctx.pkg.skillMd.content;
+      return body.includes(OUTPUT_ENV_VARS[1]) && /上一版|基线/.test(body)
+        ? null
+        : { message: "已声明迭代、优化或对比，但未说明如何使用上一版产出作为基线。" };
     },
   },
 

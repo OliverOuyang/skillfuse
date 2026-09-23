@@ -20,6 +20,7 @@ const CATEGORIES: IssueCategory[] = [
   "body",
   "io",
   "report",
+  "output",
   "trace",
   "security",
 ];
@@ -92,6 +93,7 @@ export function reportToMarkdown(report: ValidationReport, skillName: string): s
     body: "正文结构",
     io: "输入输出",
     report: "报告类专项",
+    output: "产出规范",
     trace: "trace 规范",
     security: "安全基线",
   };
