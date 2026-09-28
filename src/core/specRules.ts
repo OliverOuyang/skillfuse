@@ -102,7 +102,9 @@ export function isReportSkill(ctx: RuleContext): boolean {
 const bodyHas = (ctx: RuleContext, re: RegExp) => re.test(ctx.pkg.skillMd.content);
 
 const BASELINE_ACTION = /迭代|优化|对比|比较|iterate|optimis|optimiz|compar/i;
-const BASELINE_OUTPUT = /版本|上一版|前一版|基线|产出|重跑|version|baseline|output|rerun/i;
+// 只认「本 skill 自己的上一次产出」这类说法。「版本」「基线」「产出」单独出现时歧义太大：
+// 模型开发里的「新旧模型版本」、归因分析里的「对比基线」（比较基期）都不是产出版本对比。
+const BASELINE_OUTPUT = /上一版|前一版|上一轮|上次(?:的)?(?:产出|结果|报告)|历次(?:产出|结果)|重跑|previous (?:version|output|run)|last run|rerun/i;
 const SKILL_MAINTENANCE = /维护|开发|贡献|变更记录/i;
 
 const needsBaselineInput = (ctx: RuleContext): boolean => {
@@ -617,8 +619,9 @@ export const SPEC_RULES: SpecRule[] = [
     example: { lang: "markdown", code: OUTPUT_SECTION_MD, filename: "SKILL.md" },
     check(ctx) {
       const section = findSection(ctx, OUTPUT_SECTION_PATTERNS);
-      return section && /主交付物/.test(section.body) && /唯一|恰好一|仅一|只能有一/.test(section.body) &&
-        OUTPUT_VERSION_SUBDIRS.some((dir) => section.body.includes(`${dir}/`))
+      const content = section ? [section.body, ...section.codeBlocks.map((block) => block.code)].join("\n") : "";
+      return /主交付物/.test(content) && /唯一|恰好一|仅一|只能有一/.test(content) &&
+        OUTPUT_VERSION_SUBDIRS.some((dir) => content.includes(`${dir}/`))
         ? null
         : { message: "产出契约未明确唯一的主交付物。" };
     },
@@ -632,7 +635,8 @@ export const SPEC_RULES: SpecRule[] = [
     example: { lang: "markdown", code: OUTPUT_DIR_TREE, filename: "SKILL.md" },
     check(ctx) {
       const section = findSection(ctx, OUTPUT_SECTION_PATTERNS);
-      const missing = OUTPUT_VERSION_SUBDIRS.filter((dir) => !section?.body.includes(`${dir}/`));
+      const content = section ? [section.body, ...section.codeBlocks.map((block) => block.code)].join("\n") : "";
+      const missing = OUTPUT_VERSION_SUBDIRS.filter((dir) => !content.includes(`${dir}/`));
       return missing.length === 0
         ? null
         : { message: `未声明版本内固定四区，缺少：${missing.map((dir) => `${dir}/`).join("、")}。` };
