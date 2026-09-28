@@ -1,124 +1,282 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "产出台账",
-  "description": "产出管家的版本、执行和课题台账。目录供人阅读，标准ID供机器关联。",
+  "title": "版本台账",
   "type": "object",
   "required": [
     "schema_version",
-    "kind",
-    "标准ID",
+    "引用",
+    "节点",
+    "版本",
+    "课题",
     "中文目录名",
-    "课题ID",
+    "执行方",
+    "外部团队",
+    "skill",
     "创建时间",
-    "状态",
-    "inputs",
+    "完成时间",
+    "执行状态",
+    "触发",
+    "输入",
+    "基线",
+    "评审结论",
+    "未解决项",
     "artifacts",
     "metrics",
-    "children"
+    "children",
+    "会话"
   ],
   "properties": {
     "schema_version": {
-      "const": "1.0"
+      "const": "2.0"
     },
-    "kind": {
-      "enum": [
-        "版本",
-        "执行",
-        "课题"
-      ]
-    },
-    "标准ID": {
-      "$ref": "#/$defs/id"
-    },
-    "中文目录名": {
+    "引用": {
       "type": "string",
-      "minLength": 1,
-      "description": "从产出根目录起算的实际落盘相对路径。"
+      "pattern": "^[^/@#:\\s\\x00-\\x1f\\x7f]+@v[1-9][0-9]*(?:/[^/@#:\\s\\x00-\\x1f\\x7f]+@v[1-9][0-9]*)?$"
     },
-    "课题ID": {
-      "$ref": "#/$defs/id"
+    "节点": {
+      "type": "string",
+      "pattern": "^[^/@#:\\s\\x00-\\x1f\\x7f]+$"
     },
-    "执行ID": {
-      "$ref": "#/$defs/id"
-    },
-    "版本号": {
+    "版本": {
       "type": "integer",
       "minimum": 1
     },
-    "上一版版本号": {
-      "type": [
-        "integer",
-        "null"
-      ],
-      "minimum": 1
+    "课题": {
+      "type": "string",
+      "minLength": 1
+    },
+    "中文目录名": {
+      "type": "string",
+      "minLength": 1
+    },
+    "执行方": {
+      "enum": [
+        "skill",
+        "代码",
+        "人工",
+        "配置",
+        "智能体",
+        "报告整合"
+      ]
+    },
+    "外部团队": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "skill": {
-      "type": "object",
-      "required": [
-        "名称",
-        "中文名",
-        "skill版本",
-        "来源sha256"
-      ],
-      "properties": {
-        "名称": {
-          "$ref": "#/$defs/slug"
+      "anyOf": [
+        {
+          "type": "object",
+          "required": [
+            "名称",
+            "中文名",
+            "skill版本",
+            "来源sha256"
+          ],
+          "properties": {
+            "名称": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+            },
+            "中文名": {
+              "type": "string",
+              "minLength": 1
+            },
+            "skill版本": {
+              "type": "string",
+              "minLength": 1
+            },
+            "来源sha256": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{64}$"
+            }
+          },
+          "additionalProperties": false
         },
-        "中文名": {
-          "type": "string",
-          "minLength": 1
-        },
-        "skill版本": {
-          "type": "string",
-          "minLength": 1
-        },
-        "来源sha256": {
-          "$ref": "#/$defs/sha256"
+        {
+          "type": "null"
         }
-      },
-      "additionalProperties": false
+      ]
     },
     "创建时间": {
       "type": "string",
       "format": "date-time"
     },
-    "状态": {
+    "完成时间": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "date-time"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "执行状态": {
       "enum": [
         "进行中",
         "成功",
         "部分完成",
         "失败"
-      ],
-      "description": "进行中=已开目录尚未收尾；成功/部分完成=终态；失败=保留现场。"
+      ]
     },
-    "inputs": {
+    "触发": {
+      "type": "object",
+      "required": [
+        "类型",
+        "编号"
+      ],
+      "properties": {
+        "类型": {
+          "enum": [
+            "首次",
+            "打回",
+            "补证",
+            "循环",
+            "外部接收",
+            "重跑"
+          ]
+        },
+        "编号": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "输入": {
       "type": "array",
       "items": {
         "type": "object",
         "required": [
-          "类型",
           "引用",
           "角色"
         ],
         "properties": {
-          "类型": {
-            "enum": [
-              "产物",
-              "用户",
-              "外部"
-            ]
-          },
           "引用": {
             "type": "string",
-            "minLength": 1,
-            "description": "产物用标准ID；用户或外部输入用可追溯引用。"
+            "minLength": 1
           },
           "角色": {
             "enum": [
-              "上游",
+              "依赖",
               "基线",
               "参考"
             ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "基线": {
+      "anyOf": [
+        {
+          "type": "object",
+          "required": [
+            "引用",
+            "策略"
+          ],
+          "properties": {
+            "引用": {
+              "type": "string",
+              "minLength": 1
+            },
+            "策略": {
+              "enum": [
+                "上一版",
+                "固定首版",
+                "无"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "评审结论": {
+      "anyOf": [
+        {
+          "type": "object",
+          "required": [
+            "结论",
+            "原文",
+            "理由",
+            "目标"
+          ],
+          "properties": {
+            "结论": {
+              "enum": [
+                "通过",
+                "带问题通过",
+                "整改后复验",
+                "补证后再判"
+              ]
+            },
+            "原文": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "理由": {
+              "type": "string"
+            },
+            "目标": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[^/@#:\\s\\x00-\\x1f\\x7f]+$"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "未解决项": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "描述",
+          "指标",
+          "标准",
+          "差值"
+        ],
+        "properties": {
+          "描述": {
+            "type": "string",
+            "minLength": 1
+          },
+          "指标": {
+            "type": "string"
+          },
+          "标准": {
+            "type": "string"
+          },
+          "差值": {
+            "type": "string"
           }
         },
         "additionalProperties": false
@@ -137,7 +295,8 @@
         ],
         "properties": {
           "相对路径": {
-            "$ref": "#/$defs/relativePath"
+            "type": "string",
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\r\\n]+$"
           },
           "类型": {
             "enum": [
@@ -154,7 +313,8 @@
             ]
           },
           "sha256": {
-            "$ref": "#/$defs/sha256"
+            "type": "string",
+            "pattern": "^[a-fA-F0-9]{64}$"
           },
           "字节数": {
             "type": "integer",
@@ -163,6 +323,21 @@
         },
         "additionalProperties": false
       }
+    },
+    "metrics": {
+      "type": "object"
+    },
+    "children": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "会话": {
+      "type": "string",
+      "minLength": 1
     },
     "执行记录": {
       "type": "object",
@@ -173,8 +348,8 @@
       ],
       "properties": {
         "路径": {
-          "$ref": "#/$defs/relativePath",
-          "description": "指向沿用 trace 契约的 JSONL 文件。"
+          "type": "string",
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\r\\n]+$"
         },
         "步骤数": {
           "type": "integer",
@@ -187,216 +362,20 @@
       },
       "additionalProperties": false
     },
-    "metrics": {
+    "轮次记录": {
       "type": "object",
-      "description": "规范得分、耗时等指标；值和口径由产出方提供。"
-    },
-    "children": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/id"
-      },
-      "uniqueItems": true
-    },
-    "steps": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": [
-          "顺序",
-          "skill名称",
-          "最终采用版本ID"
-        ],
-        "properties": {
-          "顺序": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "skill名称": {
-            "$ref": "#/$defs/slug"
-          },
-          "最终采用版本ID": {
-            "$ref": "#/$defs/id"
-          }
-        },
-        "additionalProperties": false
-      }
-    },
-    "目标": {
-      "type": "string",
-      "minLength": 1
-    },
-    "验收标准": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
+      "additionalProperties": {
         "type": "string",
         "minLength": 1
       }
-    },
-    "累计执行列表": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/id"
-      },
-      "uniqueItems": true
     }
   },
-  "oneOf": [
-    {
-      "properties": {
-        "kind": {
-          "const": "版本"
-        }
-      },
-      "required": [
-        "执行ID",
-        "版本号",
-        "上一版版本号",
-        "skill"
-      ],
-      "not": {
-        "anyOf": [
-          {
-            "required": [
-              "steps"
-            ]
-          },
-          {
-            "required": [
-              "目标"
-            ]
-          },
-          {
-            "required": [
-              "验收标准"
-            ]
-          },
-          {
-            "required": [
-              "累计执行列表"
-            ]
-          }
-        ]
-      }
-    },
-    {
-      "properties": {
-        "kind": {
-          "const": "执行"
-        }
-      },
-      "required": [
-        "执行ID",
-        "steps"
-      ],
-      "not": {
-        "anyOf": [
-          {
-            "required": [
-              "版本号"
-            ]
-          },
-          {
-            "required": [
-              "上一版版本号"
-            ]
-          },
-          {
-            "required": [
-              "skill"
-            ]
-          },
-          {
-            "required": [
-              "目标"
-            ]
-          },
-          {
-            "required": [
-              "验收标准"
-            ]
-          },
-          {
-            "required": [
-              "累计执行列表"
-            ]
-          }
-        ]
-      }
-    },
-    {
-      "properties": {
-        "kind": {
-          "const": "课题"
-        }
-      },
-      "required": [
-        "目标",
-        "验收标准",
-        "累计执行列表"
-      ],
-      "not": {
-        "anyOf": [
-          {
-            "required": [
-              "执行ID"
-            ]
-          },
-          {
-            "required": [
-              "版本号"
-            ]
-          },
-          {
-            "required": [
-              "上一版版本号"
-            ]
-          },
-          {
-            "required": [
-              "skill"
-            ]
-          },
-          {
-            "required": [
-              "执行记录"
-            ]
-          },
-          {
-            "required": [
-              "steps"
-            ]
-          }
-        ]
-      }
-    }
-  ],
   "additionalProperties": false,
-  "$defs": {
-    "slug": {
-      "type": "string",
-      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
-    },
-    "id": {
-      "type": "string",
-      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*(?:/[a-z0-9]+(?:-[a-z0-9]+)*)*$"
-    },
-    "sha256": {
-      "type": "string",
-      "pattern": "^[a-fA-F0-9]{64}$"
-    },
-    "relativePath": {
-      "type": "string",
-      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\r\\n]+$"
-    }
-  },
   "allOf": [
     {
-      "$comment": "完成态：必须有产物且恰好一个主交付物。",
       "if": {
         "properties": {
-          "状态": {
+          "执行状态": {
             "enum": [
               "成功",
               "部分完成"
@@ -404,59 +383,41 @@
           }
         },
         "required": [
-          "状态"
+          "执行状态"
         ]
       },
       "then": {
         "properties": {
           "artifacts": {
-            "minItems": 1,
             "contains": {
               "type": "object",
+              "required": [
+                "角色"
+              ],
               "properties": {
                 "角色": {
                   "const": "主交付物"
                 }
-              },
-              "required": [
-                "角色"
-              ]
+              }
             },
             "minContains": 1,
             "maxContains": 1
           }
         }
-      }
-    },
-    {
-      "$comment": "进行中或失败：允许没有产物；若有主交付物也至多一个。保住现场优先于满足格式。",
-      "if": {
-        "properties": {
-          "状态": {
-            "enum": [
-              "进行中",
-              "失败"
-            ]
-          }
-        },
-        "required": [
-          "状态"
-        ]
       },
-      "then": {
+      "else": {
         "properties": {
           "artifacts": {
-            "minItems": 0,
             "contains": {
               "type": "object",
+              "required": [
+                "角色"
+              ],
               "properties": {
                 "角色": {
                   "const": "主交付物"
                 }
-              },
-              "required": [
-                "角色"
-              ]
+              }
             },
             "minContains": 0,
             "maxContains": 1
@@ -465,22 +426,25 @@
       }
     },
     {
-      "$comment": "版本级在完成态必须留下执行记录；执行级的编排顺序由 steps[] 承载，不另外强制。",
       "if": {
         "properties": {
-          "kind": {
-            "const": "版本"
-          },
-          "状态": {
+          "执行状态": {
             "enum": [
               "成功",
               "部分完成"
             ]
+          },
+          "执行方": {
+            "enum": [
+              "skill",
+              "代码",
+              "智能体"
+            ]
           }
         },
         "required": [
-          "kind",
-          "状态"
+          "执行状态",
+          "执行方"
         ]
       },
       "then": {
@@ -490,28 +454,70 @@
       }
     },
     {
-      "$comment": "执行台账在完成态必须记录至少一个编排步骤；run-begin 时允许为空。",
       "if": {
         "properties": {
-          "kind": {
-            "const": "执行"
-          },
-          "状态": {
-            "enum": [
-              "成功",
-              "部分完成"
-            ]
+          "外部团队": {
+            "type": "string",
+            "minLength": 1
           }
         },
         "required": [
-          "kind",
-          "状态"
+          "外部团队"
         ]
       },
       "then": {
         "properties": {
-          "steps": {
-            "minItems": 1
+          "触发": {
+            "properties": {
+              "类型": {
+                "const": "外部接收"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "触发": {
+            "properties": {
+              "类型": {
+                "enum": [
+                  "打回",
+                  "补证"
+                ]
+              }
+            },
+            "required": [
+              "类型"
+            ]
+          }
+        },
+        "required": [
+          "触发"
+        ]
+      },
+      "then": {
+        "properties": {
+          "触发": {
+            "properties": {
+              "编号": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "触发": {
+            "properties": {
+              "编号": {
+                "type": "null"
+              }
+            }
           }
         }
       }

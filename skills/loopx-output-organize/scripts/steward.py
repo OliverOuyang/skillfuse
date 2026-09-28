@@ -1,120 +1,43 @@
-"""产出管家：创建课题、执行和版本，并维护三层台账。"""
+"""产出管家 v2 命令入口。"""
 
 import argparse
+from contextlib import contextmanager
+from datetime import datetime
 import json
+import os
+from pathlib import Path
 import re
 import sys
-from datetime import datetime
-from pathlib import Path
 
-from ledger import (
-    DONE_STATUSES, LEDGER_NAME, build_run_ledger, build_task_ledger,
-    build_version_ledger, count_trace_steps, read_ledger, scan_artifacts,
-    sha256_file,
-    update_compare_index, write_ledger,
-)
-from outroot import (
-    VERSION_SUBDIRS, next_run_number, next_version_number, parse_run_number,
-    parse_version_number, resolve_output_root, run_dir_name, sanitize_name,
-    task_dir_name, temp_dir_name, unique_dir, version_dir_name,
-)
+import events
+import flow
+import handoff as handoff_module
+import layout
+import ledger
+import state
+import views
 
 
-STATE_NAME = ".当前状态.json"  # 工具内部状态，不属于规范展示目录。
-FINAL_STATUSES = ("成功", "部分完成", "失败")
+FRONTMATTER_VERSION = re.compile(r"^\s{2,}version:\s*['\"]?([^'\"\s]+)", re.MULTILINE)
 SKILL_SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-
-
-def project_root():
-    """从当前工作目录向上找 .git，作为产出落盘的项目根。
-
-    必须以 cwd 为起点而不是脚本位置：skill 脚本装在 skill 仓库里，
-    用户干活的项目是另一个目录，按脚本位置找会把所有产出都落到 skill 仓库。
-    """
-    cwd = Path.cwd().resolve()
-    for path in (cwd, *cwd.parents):
-        if (path / ".git").exists():
-            return path
-    return cwd
 
 
 def now():
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
-def relative(root, path):
-    return path.relative_to(root).as_posix()
-
-
-def read_state(root):
-    path = root / STATE_NAME
-    if not path.is_file():
-        return {}
-    with path.open("r", encoding="utf-8") as source:
-        return json.load(source)
-
-
-def write_state(root, state):
-    root.mkdir(parents=True, exist_ok=True)
-    with (root / STATE_NAME).open("w", encoding="utf-8") as target:
-        json.dump(state, target, ensure_ascii=False, indent=2)
-        target.write("\n")
-
-
-def task_dirs(root):
-    if not root.is_dir():
-        return []
-    return sorted(path for path in root.iterdir() if path.is_dir()
-                  and path.name.startswith(("【课题】", "【临时】")))
-
-
-def find_task(root, name, temp=None):
-    clean = sanitize_name(name)
-    candidates = [root / (temp_dir_name(clean) if temp else task_dir_name(clean))]
-    if temp is None:
-        candidates.append(root / temp_dir_name(clean))
-    return next((path for path in candidates if path.is_dir()), None)
-
-
-def task_slug(root, name, explicit=None):
-    """生成课题的标准 ID。
-
-    优先用调用方给的英文 slug——标准 ID 会出现在 diff 命令和排查现场，
-    q3-risk-review 比一串十六进制有用得多。没给时退回中文名的 UTF-8
-    十六进制编码：可读性差，但合法、稳定，且能从 ID 无损还原出中文名。
-    """
-    if explicit:
-        if not SKILL_SLUG.fullmatch(explicit):
-            raise ValueError("--slug 必须是小写英文 slug，例如 q3-risk-review")
-        slug = explicit
-    else:
-        slug = "task-" + name.encode("utf-8").hex()
-    for path in task_dirs(root):
-        ledger_path = path / LEDGER_NAME
-        if ledger_path.is_file() and read_ledger(ledger_path).get("课题ID") == slug:
-            raise ValueError(f"课题 ID 已由其它目录使用: {path}")
-    return slug
-
-
-FRONTMATTER_VERSION = re.compile(r"^\s{2,}version:\s*['\"]?([^'\"\s]+)", re.MULTILINE)
+def write_json(path, data):
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def resolve_skill_meta(args, skill_cn):
-    """确定这一版是哪个版本的业务 skill 跑出来的。
-
-    版本对比要回答「指标变化是提示词改动带来的还是输入变了」，
-    而这只有在台账记下当时的 skill 版本和源文件摘要时才答得出来。
-    --skill-file 指向业务 skill 的 SKILL.md 时自动提取；
-    --skill-version 可显式覆盖；都没给才退回 unknown 占位。
-    """
-    version = getattr(args, "skill_version", None)
+    version = args.skill_version
     digest = "0" * 64
-    path = getattr(args, "skill_file", None)
-    if path:
-        source = Path(path).expanduser()
+    if args.skill_file:
+        source = Path(args.skill_file).expanduser()
         if not source.is_file():
-            raise ValueError(f"--skill-file 不存在: {path}")
-        digest = sha256_file(source)
+            raise ValueError(f"--skill-file 不存在: {args.skill_file}")
+        digest = ledger.sha256_file(source)
         if not version:
             matched = FRONTMATTER_VERSION.search(source.read_text(encoding="utf-8"))
             version = matched.group(1) if matched else None
@@ -122,298 +45,489 @@ def resolve_skill_meta(args, skill_cn):
             "skill版本": version or "unknown", "来源sha256": digest}
 
 
+def task_dirs(root):
+    return sorted(path.parent for path in root.glob("*/*/课题.json")
+                  if path.parent.name.startswith(("【课题】", "【临时】")))
+
+
+def find_task(root, selector):
+    if selector is None:
+        selected = layout.read_state(root).get("课题")
+        task = (root / selected).resolve() if selected else None
+        if task and task.is_relative_to(root) and task in task_dirs(root):
+            return task
+        raise ValueError("没有当前课题，请先运行 task-begin")
+    matches = [task for task in task_dirs(root) if task.name == selector
+               or ledger.read_json(task / layout.TASK_META)["课题ID"] == selector]
+    if len(matches) != 1:
+        raise ValueError(f"课题匹配数量为 {len(matches)}: {selector}；候选: "
+                         + "、".join(str(path) for path in matches))
+    return matches[0]
+
+
+def emit(task, type_, fields):
+    return events.append_event(task, type_, fields, session=layout.session_id())
+
+
+@contextmanager
+def transaction(root):
+    # 命令间串行化，避免失败回滚误删另一命令刚分配的版本。
+    existed = root.exists()
+    root.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(root, os.O_RDONLY)
+    try:
+        if events.fcntl is not None:
+            events.fcntl.flock(descriptor, events.fcntl.LOCK_EX)
+        paths = set(root.rglob("*"))
+        names = {layout.LEDGER_NAME, layout.TASK_META, layout.FLOW_FILE,
+                 layout.STATE_FILE, events.LOG_NAME}
+        originals = {path: path.read_text(encoding="utf-8") for path in paths
+                     if path.is_file() and path.name in names}
+        try:
+            yield
+        except Exception:
+            for path in sorted(set(root.rglob("*")) - paths, key=lambda p: len(p.parts), reverse=True):
+                if path.is_dir() and not path.is_symlink():
+                    path.rmdir()
+                else:
+                    path.unlink()
+            for path, content in originals.items():
+                if not path.exists() or path.read_text(encoding="utf-8") != content:
+                    path.write_text(content, encoding="utf-8")
+            if not existed:
+                root.rmdir()
+            raise
+    finally:
+        os.close(descriptor)
+
+
 def task_begin(root, args):
-    name = sanitize_name(args.name)
-    task = find_task(root, name, args.temp)
-    if task:
-        data = read_ledger(task / LEDGER_NAME)
-    else:
-        task = root / (temp_dir_name(name) if args.temp else task_dir_name(name))
-        slug = task_slug(root, name, getattr(args, "slug", None))
+    name = layout.sanitize_name(args.name)
+    if args.slug is not None and not SKILL_SLUG.fullmatch(args.slug):
+        raise ValueError("--slug 必须是小写英文 slug")
+    source = flow.find_template(args.flow_template) if args.flow_template else args.flow
+    definition = flow.normalize_flow(flow.load_flow_source(Path(source))) if source else flow.implicit_flow()
+    task = layout.task_dir_path(root, definition["流程"], name, args.temp)
+    if not task.exists():
+        slug = args.slug or "task-" + name.encode("utf-8").hex()
+        if any(ledger.read_json(path / layout.TASK_META)["课题ID"] == slug for path in task_dirs(root)):
+            raise ValueError(f"课题 ID 已由其它目录使用: {slug}")
+        meta = {"schema_version": "2.0", "课题ID": slug, "名称": name,
+                "智能体": definition["流程"], "临时": args.temp, "创建时间": now(),
+                "继承": args.inherit, "目标": args.goal or "待补充", "验收标准": args.criteria or []}
+        problems = ledger.validate_task_meta(meta)
+        if problems:
+            raise ValueError("；".join(problems))
         task.mkdir(parents=True)
-        (task / "版本对比").mkdir()
-        goal = args.goal or "待补充"
-        criteria = [args.criteria] if args.criteria else ["待补充"]
+        write_json(task / layout.TASK_META, meta)
+        write_json(task / layout.FLOW_FILE, definition)
         (task / "课题说明.md").write_text(
-            f"# {name}\n\n## 目标\n{goal}\n\n## 验收标准\n{criteria[0]}\n\n## 累计进展\n\n## 已尝试方案\n",
-            encoding="utf-8",
-        )
-        data = build_task_ledger(
-            slug, relative(root, task), slug, now(), "进行中", [], [],
-            {"课题名slug映射": {name: slug}}, [], goal, criteria, [],
-        )
-        write_ledger(task / LEDGER_NAME, data)
-    write_state(root, {"课题": relative(root, task), "执行": None})
-    return {"课题目录": str(task.resolve()), "课题ID": data["课题ID"], "状态": data["状态"]}
+            f"# {name}\n\n" + (f"继承：{args.inherit}\n\n" if args.inherit else "")
+            + f"## 目标\n{meta['目标']}\n\n## 验收标准\n"
+            + "\n".join(f"- {item}" for item in meta["验收标准"]) + "\n", encoding="utf-8")
+        emit(task, "开课题", {"流程": definition["流程"], "流程版本": definition["流程版本"], "继承": args.inherit})
+    meta = ledger.read_json(task / layout.TASK_META)
+    layout.write_state(root, {"智能体": meta["智能体"], "课题": task.relative_to(root).as_posix()})
+    return {"课题目录": str(task), "课题ID": meta["课题ID"]}, task
 
 
-def run_begin(root, args):
+def flow_check(root, args):
+    definition = flow.normalize_flow(flow.load_flow_source(Path(args.flow)))
+    return {"节点数": len(definition["节点"]), "交接点": definition["交接点"], "问题": []}, None
+
+
+def flow_update(root, args):
     task = find_task(root, args.task)
-    if task is None:
-        raise FileNotFoundError(f"课题不存在: {args.task}")
-    task_data = read_ledger(task / LEDGER_NAME)
-    number = next_run_number(task)
-    run = unique_dir(task, run_dir_name(number, datetime.now().astimezone()))
-    run.mkdir()
-    for name in ("我的需求", "最终交付", "执行记录", "各环节产出"):
-        (run / name).mkdir()
-    (run / "本次说明.md").write_text("# 本次执行\n\n状态：进行中\n", encoding="utf-8")
-    run_id = f"{task_data['课题ID']}/run-{number}"
-    data = build_run_ledger(run_id, relative(root, run), task_data["课题ID"],
-                            run_id, now(), "进行中", [], [], None, {}, [], [])
-    write_ledger(run / LEDGER_NAME, data)
-    task_data["累计执行列表"].append(run_id)
-    task_data["children"].append(run_id)
-    write_ledger(task / LEDGER_NAME, task_data)
-    write_state(root, {"课题": relative(root, task), "执行": relative(root, run)})
-    return {"执行目录": str(run.resolve()), "执行ID": run_id, "状态": "进行中"}
+    definition, summary = flow.update_flow(ledger.read_json(task / layout.FLOW_FILE),
+                                           flow.load_flow_source(Path(args.flow)))
+    write_json(task / layout.FLOW_FILE, definition)
+    emit(task, "流程变更", {"摘要": summary, "原因": args.reason})
+    return summary, task
 
 
-def current_run(root):
-    state = read_state(root)
-    if not state.get("课题") or not state.get("执行"):
-        raise ValueError("没有当前执行，请先运行 run-begin")
-    task = (root / state["课题"]).resolve()
-    run = (root / state["执行"]).resolve()
-    if not task.is_relative_to(root) or not run.parent == task or not run.is_dir():
-        raise ValueError("当前执行状态无效")
-    return task, run
+def require_node(current, node):
+    if node not in current.flow["节点"] or node in current.flow["已移出"]:
+        raise ValueError(f"节点不存在或已移出: {node}")
+    return current.flow["节点"][node]
 
 
-def version_entries(task, skill_cn):
-    entries = {}
-    for run in task.iterdir():
-        if not run.is_dir() or parse_run_number(run.name) is None:
-            continue
-        skill_dir = run / "各环节产出" / skill_cn
-        if not skill_dir.is_dir():
-            continue
-        for path in skill_dir.iterdir():
-            number = parse_version_number(path.name)
-            if number is not None and path.is_dir():
-                entries[number] = path
-    return entries
+def dependency_inputs(current, node, force):
+    inputs = []
+    for dependency in node["依赖"]:
+        if dependency.startswith("交接:"):
+            latest = current.latest_handoff(dependency[3:])
+            reference = f"交接#{latest['编号']}" if latest else None
+        else:
+            selected = current.current(dependency)
+            reference = (f"{dependency}@跳过" if selected == "跳过" else
+                         layout.version_ref(dependency, selected) if isinstance(selected, int) else None)
+        if reference:
+            inputs.append({"引用": reference, "角色": "依赖"})
+        elif not force:
+            raise ValueError(f"依赖未就绪: {dependency}；需要 --force-deps")
+    return inputs
+
+
+def loop_definitions(current, node_id):
+    return [node["循环"] for key, node in current.flow["节点"].items()
+            if node["循环"] and (key == node_id or node["循环"]["与"] == node_id)]
+
+
+def allocation_trigger(current, node_id, args):
+    if args.external:
+        return {"类型": "外部接收", "编号": None}
+    pending = current.pending_triggers(node_id)
+    if pending:
+        earliest = min(pending, key=lambda item: item["序号"])
+        return {"类型": earliest["类型"], "编号": earliest["编号"]}
+    previous = bool(current.ledgers.get(node_id))
+    return {"类型": "循环" if previous and loop_definitions(current, node_id)
+            else "重跑" if previous else "首次", "编号": None}
+
+
+def baseline_for(current, node_id, node, explicit):
+    versions = current.ledgers.get(node_id, {})
+    if explicit == "none" or (explicit is None and node["基线"] == "无"):
+        return None
+    if explicit is not None and "/" in explicit:
+        parsed = layout.parse_ref(explicit)
+        if not parsed["课题"] or parsed["版本"] is None or parsed["嵌套"]:
+            raise ValueError("跨课题基线必须为 <课题ID>/<节点>@vN")
+        baseline_directory(current.task_dir, explicit)
+        return {"引用": explicit, "策略": node["基线"]}
+    if explicit is not None:
+        number = int(explicit)
+        if number not in versions:
+            raise ValueError(f"基线版本不存在: {number}")
+    elif node["基线"] == "固定首版":
+        number = 1 if 1 in versions else None
+    else:
+        number = max((n for n, data in versions.items() if data["执行状态"] in ledger.DONE_STATUSES), default=None)
+    return {"引用": layout.version_ref(node_id, number), "策略": node["基线"]} if number else None
+
+
+def allocation_plan(current, args):
+    if args.parent:
+        parent = Path(args.parent).resolve()
+        if not parent.is_relative_to(current.task_dir):
+            raise ValueError("父版本不属于当前课题")
+        data = ledger.read_json(parent / layout.LEDGER_NAME)
+        if ledger.validate_version_ledger(data) or "/" in data["引用"]:
+            raise ValueError("父台账无效或超出契约支持的嵌套层级")
+        node_id = args.skill_cn or args.node
+        layout.validate_node_id(node_id)
+        directory = parent / layout.NESTED_DIR / layout.sanitize_name(node_id)
+        return node_id, directory, "skill", [], None, {"类型": "外部接收" if args.external else "首次", "编号": None}, data
+    node_id = args.node
+    if node_id not in current.flow["节点"] and current.flow["流程"] == layout.IMPLICIT_AGENT:
+        node_id = args.skill_cn or node_id
+        definition = flow.with_node(current.flow, node_id)
+        if definition != current.flow:
+            write_json(current.task_dir / layout.FLOW_FILE, definition)
+            emit(current.task_dir, "流程变更", {"摘要": {"新增": [node_id], "移出": [], "改名": []}, "原因": "单独调用自动添加节点"})
+        current = state.load_task_state(current.task_dir)
+    node = require_node(current, node_id)
+    for loop in loop_definitions(current, node_id):
+        limit = loop.get("最大轮次")
+        if limit is not None and current.rounds(node_id) >= limit and not args.override:
+            raise ValueError("达到循环上限，需要 --override")
+    if args.external and not node["可外部交付"] and not args.override:
+        raise ValueError("节点不可外部交付，需要 --override")
+    inputs = dependency_inputs(current, node, args.force_deps)
+    baseline = baseline_for(current, node_id, node, args.baseline)
+    if baseline:
+        inputs.append({"引用": baseline["引用"], "角色": "基线"})
+    return (node_id, layout.node_dir(current.task_dir, current.flow, node_id), node["执行方"],
+            inputs, baseline, allocation_trigger(current, node_id, args), None)
+
+
+def baseline_directory(task, reference):
+    parsed = layout.parse_ref(reference)
+    target = find_task(task.parent.parent, parsed["课题"]) if parsed["课题"] else task
+    definition = ledger.read_json(target / layout.FLOW_FILE)
+    if parsed["节点"] not in definition["节点"]:
+        raise ValueError(f"基线节点不存在: {reference}")
+    directory = layout.node_dir(target, definition, parsed["节点"]) / layout.version_dir_name(parsed["版本"])
+    if not (directory / layout.LEDGER_NAME).is_file():
+        raise ValueError(f"基线版本不存在: {reference}")
+    return str(directory)
+
+
+def rework_requirement(current, trigger):
+    if trigger["类型"] not in ("打回", "补证"):
+        return None
+    event = next(item for item in current.events
+                 if item["类型"] == trigger["类型"] and item.get("编号") == trigger["编号"])
+    return {key: event[key] for key in ("类型", "编号", "来源", "原因")}
+
+
+def allocation_result(task, directory, data, previous):
+    baseline = data["基线"]
+    baseline_dir = baseline_directory(task, baseline["引用"]) if baseline else None
+    previous_dir = str(directory.parent / layout.version_dir_name(previous)) if previous else None
+    return {"目录": str(directory), "节点": data["节点"], "版本": data["版本"], "引用": data["引用"],
+            "输入": data["输入"], "触发": data["触发"], "基线目录": baseline_dir, "上一版目录": previous_dir,
+            "env": {"SKILLFUSE_OUTPUT_DIR": str(directory), "SKILLFUSE_BASELINE_DIR": baseline_dir,
+                    "SKILLFUSE_PREVIOUS_DIR": previous_dir, "SKILLFUSE_OUTPUT_VERSION": str(data["版本"]),
+                    "SKILLFUSE_NODE": data["节点"], "SKILLFUSE_TASK_DIR": str(task)}}
 
 
 def alloc(root, args):
-    if not SKILL_SLUG.fullmatch(args.skill):
-        raise ValueError("skill 必须是小写英文 slug")
-    task, run = current_run(root)
-    if read_ledger(run / LEDGER_NAME)["状态"] != "进行中":
-        raise ValueError("当前执行已收尾")
-    skill_cn = sanitize_name(args.skill_cn)
-    number = next_version_number(task, skill_cn)
-    entries = version_entries(task, skill_cn)
-    baseline = None
-    if args.baseline != "none":
-        base_number = number - 1 if args.baseline == "latest" else int(args.baseline)
-        if base_number > 0:
-            baseline = entries.get(base_number)
-            if baseline is None:
-                raise ValueError(f"基线版本不存在: {base_number}")
-    # --parent 指向调用方的版本目录时挂到它的「内部调用/」下，保留嵌套的从属关系；
-    # 版本号仍按（课题, skill）统一计数，不随父 skill 重置，版本线才连得起来。
-    parent_dir = getattr(args, "parent", None)
-    if parent_dir:
-        parent = Path(parent_dir).resolve()
-        if not (parent / LEDGER_NAME).is_file():
-            raise ValueError(f"--parent 不是有效的版本目录: {parent_dir}")
-        version = parent / "内部调用" / skill_cn / version_dir_name(number)
-    else:
-        version = run / "各环节产出" / skill_cn / version_dir_name(number)
-    version.mkdir(parents=True)
-    for name in VERSION_SUBDIRS:
-        (version / name).mkdir()
-    (task / "版本对比" / skill_cn).mkdir(parents=True, exist_ok=True)
-    run_data = read_ledger(run / LEDGER_NAME)
-    task_id = run_data["课题ID"]
-    version_id = f"{task_id}/{args.skill}/v{number}"
-    inputs = []
-    if baseline:
-        inputs.append({"类型": "产物", "引用": read_ledger(baseline / LEDGER_NAME)["标准ID"], "角色": "基线"})
-    skill = resolve_skill_meta(args, skill_cn)
-    data = build_version_ledger(version_id, relative(root, version), task_id,
-                                run_data["执行ID"], number, number - 1 or None,
-                                skill, now(), "进行中", inputs, [], None, {}, [])
-    write_ledger(version / LEDGER_NAME, data)
-    if parent_dir:
-        # 嵌套关系要能从台账查到，不能只体现在目录层级上。
-        parent_ledger = Path(parent_dir).resolve() / LEDGER_NAME
-        parent_data = read_ledger(parent_ledger)
-        if version_id not in parent_data["children"]:
-            parent_data["children"] = [*parent_data["children"], version_id]
-            write_ledger(parent_ledger, parent_data)
-    return {"目录": str(version.resolve()), "版本号": number, "标准ID": version_id,
-            "基线目录": str(baseline.resolve()) if baseline else None,
-            "env": {"SKILLFUSE_OUTPUT_DIR": str(version.resolve()),
-                    "SKILLFUSE_BASELINE_DIR": str(baseline.resolve()) if baseline else None,
-                    "SKILLFUSE_OUTPUT_VERSION": str(number)}}
+    task = find_task(root, args.task)
+    current = state.load_task_state(task)
+    node_id, directory, executor, inputs, baseline, trigger, parent = allocation_plan(current, args)
+    requirement = rework_requirement(current, trigger)
+    if requirement:
+        inputs = [*inputs, {"引用": requirement["来源"], "角色": "参考"}]
+    skill = resolve_skill_meta(args, args.skill_cn or node_id) if args.skill else None
+    if not args.skill and (args.skill_file or args.skill_version):
+        raise ValueError("--skill-file / --skill-version 需要 --skill")
+    previous = max(layout.list_versions(directory), default=None)
+    number, version = layout.allocate_version_dir(directory)
+    reference = layout.version_ref(node_id, number)
+    if parent:
+        reference = parent["引用"] + "/" + reference
+    data = ledger.new_version_ledger(**{
+        "引用": reference, "节点": node_id, "版本": number, "课题": current.meta["课题ID"],
+        "中文目录名": version.relative_to(root).as_posix(), "执行方": executor,
+        "外部团队": args.external, "skill": skill, "创建时间": now(), "会话": layout.session_id(),
+        "输入": inputs, "基线": baseline, "触发": trigger})
+    ledger.write_ledger(version / layout.LEDGER_NAME, data)
+    if parent:
+        ledger.write_ledger(Path(args.parent).resolve() / layout.LEDGER_NAME,
+                            {**parent, "children": [*parent["children"], reference]})
+    fields = {"节点": reference if parent else node_id, "版本": number, "触发": trigger, "基线": baseline["引用"] if baseline else None}
+    # 人工放行原因只记事件，不增加契约限定的台账字段。
+    confirmations = [reason for reason in (args.force_deps, args.override) if reason]
+    if confirmations:
+        fields["人工确认"] = "；".join(confirmations)
+    emit(task, "分配", fields)
+    return {**allocation_result(task, version, data, previous), "重做要求": requirement}, task
+
+
+def review(current, data, args):
+    nested = "/" in data["引用"]
+    node = current.flow["节点"].get(data["节点"]) if not nested else None
+    gate = bool(node and node["门禁"])
+    if args.verdict and not gate:
+        raise ValueError("非门禁节点不能带 --verdict")
+    if gate and args.status in ledger.DONE_STATUSES and not args.verdict:
+        raise ValueError("门禁完成态必须带 --verdict")
+    if not args.verdict:
+        return None
+    verdict = flow.resolve_verdict(current.flow, data["节点"], args.verdict)
+    targets = list(dict.fromkeys(args.to.split(","))) if args.to else []
+    for target in targets:
+        require_node(current, target)
+    if verdict in ("整改后复验", "补证后再判"):
+        if not targets:
+            raise ValueError("整改或补证必须带 --to")
+        allowed = node["可打回至"] if verdict == "整改后复验" else node["可补证至"]
+        confirm = any(target not in allowed for target in targets)
+        if verdict == "整改后复验":
+            confirm |= any(flow.is_cross_stage(current.flow, data["节点"], target) for target in targets)
+            confirm |= node["不达标处理"] == "带问题通过"
+        if confirm and not args.confirm:
+            raise ValueError("该目标或不达标处理需要 --confirm")
+    if verdict == "带问题通过" and not args.issue:
+        raise ValueError("带问题通过必须至少一个 --issue")
+    return {"结论": verdict, "原文": args.verdict if args.verdict != verdict else None,
+            "理由": args.reason or "", "目标": targets}
+
+
+def review_events(current, data, args):
+    verdict = data["评审结论"]
+    result = []
+    if verdict and verdict["结论"] in ("整改后复验", "补证后再判"):
+        kind = "打回" if verdict["结论"] == "整改后复验" else "补证"
+        fields = {"编号": events.next_number(current.events, kind), "来源": data["引用"],
+                  "目标": verdict["目标"], "原因": args.reason or "", "人工确认": args.confirm}
+        if kind == "打回":
+            fields["跨阶段"] = any(flow.is_cross_stage(current.flow, data["节点"], target) for target in verdict["目标"])
+        result.append(emit(current.task_dir, kind, fields))
+    number = events.next_number(current.events, "未解决项")
+    for offset, issue in enumerate(data["未解决项"]):
+        result.append(emit(current.task_dir, "未解决项", {**issue, "编号": number + offset,
+                           "动作": "新增", "来源": data["引用"]}))
+    # 嵌套事件以完整引用隔离，避免同名调用改变流程节点的当前采用。
+    event_node = data["引用"] if "/" in data["引用"] else data["节点"]
+    result.append(emit(current.task_dir, "提交", {"节点": event_node, "版本": data["版本"],
+                       "执行状态": data["执行状态"], "评审结论": verdict["结论"] if verdict else None}))
+    return result
+
+
+def round_fields(current, data, args):
+    node = current.flow["节点"].get(data["节点"], {}) if "/" not in data["引用"] else {}
+    required = (node.get("循环") or {}).get("每轮必记", [])
+    record = json.loads(args.round) if args.round is not None else None
+    if required and args.status in ledger.DONE_STATUSES:
+        if not isinstance(record, dict):
+            raise ValueError("完成态必须提供 --round 轮次记录")
+        missing = [key for key in required if key not in record]
+        if missing:
+            raise ValueError("轮次记录缺少必记项：" + "、".join(missing))
+    return {"轮次记录": record} if args.round is not None else {}
 
 
 def commit(root, args):
-    version = Path(args.dir).resolve()
-    if not version.is_relative_to(root) or not version.is_dir():
-        raise ValueError("版本目录不在产出根内")
-    old = read_ledger(version / LEDGER_NAME)
-    if old["kind"] != "版本" or old["状态"] != "进行中":
+    task = find_task(root, args.task)
+    directory = Path(args.dir).resolve()
+    if not directory.is_relative_to(task):
+        raise ValueError("版本目录不属于当前课题")
+    current = state.load_task_state(task)
+    old = ledger.read_json(directory / layout.LEDGER_NAME)
+    if old["执行状态"] != "进行中":
         raise ValueError("版本不是进行中状态")
-    if args.status in DONE_STATUSES and not args.primary:
-        raise ValueError("完成态必须指定 --primary")
-    metrics = json.loads(args.metrics) if args.metrics else {}
-    if not isinstance(metrics, dict):
-        raise ValueError("metrics 必须是 JSON 对象")
-    artifacts = scan_artifacts(version, args.primary)
-    trace = count_trace_steps(version)
-    data = build_version_ledger(
-        old["标准ID"], old["中文目录名"], old["课题ID"], old["执行ID"],
-        old["版本号"], old["上一版版本号"], old["skill"], old["创建时间"],
-        args.status, old["inputs"], artifacts, trace, metrics, old["children"],
-    )
-    task = root / Path(old["中文目录名"]).parts[0]
-    write_ledger(version / LEDGER_NAME, data)
-    update_compare_index(task, old["skill"]["中文名"], old["版本号"], version, args.status)
-    return {"目录": str(version), "标准ID": old["标准ID"], "状态": args.status,
-            "产物数": len(artifacts)}
+    verdict = review(current, old, args)
+    issues = [json.loads(item) for item in args.issue]
+    issues = [{"指标": "", "标准": "", "差值": "", **item} for item in issues]
+    trace = ledger.count_trace_steps(directory)
+    fields = {"执行状态": args.status, "完成时间": now(), "评审结论": verdict,
+              "未解决项": issues, "metrics": json.loads(args.metrics) if args.metrics else {},
+              "artifacts": ledger.scan_artifacts(directory, args.primary)}
+    if trace:
+        fields["执行记录"] = {key: trace[key] for key in ("路径", "步骤数", "失败数")}
+    fields.update(round_fields(current, old, args))
+    data = ledger.finalize_version_ledger(old, **fields)
+    ledger.write_ledger(directory / layout.LEDGER_NAME, data)
+    emitted = review_events(current, data, args)
+    nested = "/" in data["引用"]
+    validity = (args.status if args.status == "失败" else "当前采用") if nested else state.load_task_state(task).validity(data["节点"], data["版本"])
+    next_steps = []
+    if verdict:
+        if verdict["结论"] in ("整改后复验", "补证后再判"):
+            next_steps = verdict["目标"]
+        elif verdict["结论"] in ("通过", "带问题通过") and current.flow["节点"][data["节点"]]["交接"]:
+            next_steps = [f"handoff --node {data['节点']}"]
+    result = {"引用": data["引用"], "执行状态": data["执行状态"], "评审结论": verdict,
+              "有效性": validity, "事件": [{"类型": item["类型"], "编号": item.get("编号")} for item in emitted], "下一步": next_steps}
+    if trace and trace["坏行数"]:
+        result["warning"] = [f"执行记录含 {trace['坏行数']} 个坏行"]
+    return result, task
 
 
-def adopted_versions(run):
-    selected = []
-    output = run / "各环节产出"
-    for skill_dir in sorted(output.iterdir()):
-        if not skill_dir.is_dir():
-            continue
-        choices = []
-        for version in skill_dir.iterdir():
-            number = parse_version_number(version.name)
-            if number is None or not (version / LEDGER_NAME).is_file():
-                continue
-            data = read_ledger(version / LEDGER_NAME)
-            if data["状态"] in DONE_STATUSES:
-                choices.append((number, data))
-        if choices:
-            selected.append(max(choices, key=lambda item: item[0])[1])
-    return selected
+def adopt(root, args):
+    task = find_task(root, args.task)
+    current = state.load_task_state(task)
+    require_node(current, args.node)
+    data = current.ledgers.get(args.node, {}).get(args.version)
+    if not data or data["执行状态"] not in ledger.DONE_STATUSES:
+        raise ValueError("采用版本必须存在且为完成态")
+    return emit(task, "采用", {"节点": args.node, "版本": args.version, "原因": args.reason}), task
 
 
-def scan_run_artifacts(run, primary_rel):
-    primary = Path(primary_rel) if primary_rel else None
-    if primary and (primary.is_absolute() or ".." in primary.parts
-                    or not (run / primary).is_file()):
-        raise FileNotFoundError(primary_rel)
-    artifacts = []
-    # 执行目录还含各 skill 的独立台账，只收录执行层的交付和记录。
-    for directory, category in (("最终交付", "报告"), ("执行记录", "执行记录")):
-        for path in sorted((run / directory).rglob("*")):
-            if path.is_file():
-                rel = path.relative_to(run)
-                artifacts.append({"相对路径": rel.as_posix(), "类型": category,
-                                  "角色": "主交付物" if rel == primary else "附属",
-                                  "sha256": sha256_file(path), "字节数": path.stat().st_size})
-    if primary and not any(item["角色"] == "主交付物" for item in artifacts):
-        raise ValueError("执行主交付物必须位于 最终交付/ 或 执行记录/")
-    return artifacts
+def skip(root, args):
+    task = find_task(root, args.task)
+    current = state.load_task_state(task)
+    node = require_node(current, args.node)
+    if not node["可跳过"] and not args.confirm:
+        raise ValueError("节点不可跳过，需要 --confirm")
+    layout.node_dir(task, current.flow, args.node).mkdir(parents=True, exist_ok=True)
+    return emit(task, "跳过", {"节点": args.node, "原因": args.reason, "人工确认": args.confirm}), task
 
 
-def run_finish(root, args):
-    task, run = current_run(root)
-    old = read_ledger(run / LEDGER_NAME)
-    if old["状态"] != "进行中":
-        raise ValueError("当前执行已收尾")
-    status = args.status
-    if status in DONE_STATUSES and not args.primary:
-        raise ValueError("完成态必须指定 --primary")
-    chosen = adopted_versions(run)
-    steps = [{"顺序": i, "skill名称": data["skill"]["名称"],
-              "最终采用版本ID": data["标准ID"]}
-             for i, data in enumerate(chosen, 1)]
-    artifacts = scan_run_artifacts(run, args.primary)
-    trace = count_trace_steps(run)
-    data = build_run_ledger(old["标准ID"], old["中文目录名"], old["课题ID"],
-                            old["执行ID"], old["创建时间"], status, old["inputs"],
-                            artifacts, trace, old["metrics"],
-                            [item["标准ID"] for item in chosen], steps)
-    lines = ["# 本次执行", "", f"状态：{status}", "", "## 最终采用版本"]
-    lines.extend(f"{step['顺序']}. {step['skill名称']}：{step['最终采用版本ID']}" for step in steps)
-    lines.extend(["", "## 结论", args.summary or "待补充", ""])
-    write_ledger(run / LEDGER_NAME, data)
-    (run / "本次说明.md").write_text("\n".join(lines), encoding="utf-8")
-    return {"执行目录": str(run), "执行ID": old["执行ID"], "状态": status, "steps": steps}
+def handoff(root, args):
+    task = find_task(root, args.task)
+    result = handoff_module.create_handoff(state.load_task_state(task), args.node,
+                 session=layout.session_id(), confirm=args.confirm, now=datetime.now().astimezone())
+    return result, task
 
 
-def status(root):
-    state = read_state(root)
-    task_rel = state.get("课题")
-    run_rel = state.get("执行")
-    task = root / task_rel if task_rel else None
-    versions = {}
-    if task and task.is_dir():
-        for run in task.iterdir():
-            if not run.is_dir() or parse_run_number(run.name) is None:
-                continue
-            output = run / "各环节产出"
-            if not output.is_dir():
-                continue
-            for skill in output.iterdir():
-                if skill.is_dir():
-                    numbers = [parse_version_number(p.name) for p in skill.iterdir() if p.is_dir()]
-                    numbers = [n for n in numbers if n is not None]
-                    if numbers:
-                        versions[skill.name] = max(versions.get(skill.name, 0), *numbers)
-    return {"当前课题": str(task.resolve()) if task and task.is_dir() else None,
-            "当前执行": str((root / run_rel).resolve()) if run_rel and (root / run_rel).is_dir() else None,
-            "各skill最新版本号": versions}
+def issue_close(root, args):
+    task = find_task(root, args.task)
+    if args.id not in [item["编号"] for item in state.load_task_state(task).open_issues()]:
+        raise ValueError("未解决项不存在或已关闭")
+    return emit(task, "未解决项", {"编号": args.id, "动作": "关闭", "处理": args.resolution, "原因": args.reason}), task
+
+
+def status(root, args):
+    task = find_task(root, args.task)
+    current = state.load_task_state(task)
+    nodes = {}
+    if args.node:
+        require_node(current, args.node)
+    for node in ([args.node] if args.node else current.flow["节点"]):
+        selected = current.current(node)
+        nodes[node] = {"当前采用": selected, "有效性": current.validity(node, selected) if isinstance(selected, int) else selected}
+    if args.node:
+        reason = next((item["原因"] for item in reversed(current.events)
+                       if item["类型"] == "采用" and item["节点"] == args.node), None)
+        nodes[args.node].update({"版本历史": views._version_history(current, args.node), "采用原因": reason})
+    return {"当前课题": str(task), "节点": nodes, "待办": current.todo(), "未关闭未解决项": current.open_issues()}, task
+
+
+class ArgumentError(ValueError):
+    pass
 
 
 class JsonArgumentParser(argparse.ArgumentParser):
     def error(self, message):
-        raise ValueError(message)
+        raise ArgumentError(message)
 
 
 def parser():
-    p = JsonArgumentParser(description="产出管家")
-    p.add_argument("--output-root", help="产出根目录")
-    commands = p.add_subparsers(dest="command", required=True)
-    task = commands.add_parser("task-begin")
-    task.add_argument("--name", required=True)
-    task.add_argument("--slug", help="课题的英文标准 ID，如 q3-risk-review；不给则按中文名自动生成")
-    task.add_argument("--goal")
-    task.add_argument("--criteria")
-    task.add_argument("--temp", action="store_true")
-    run = commands.add_parser("run-begin")
-    run.add_argument("--task", required=True)
-    alloc_parser = commands.add_parser("alloc")
-    alloc_parser.add_argument("--skill", required=True)
-    alloc_parser.add_argument("--skill-cn", required=True)
-    alloc_parser.add_argument("--baseline", default="latest")
-    alloc_parser.add_argument("--parent", help="调用方的版本目录；给出时本版挂在其 内部调用/ 下")
-    alloc_parser.add_argument("--skill-file", help="业务 skill 的 SKILL.md 路径，用于记录其版本与源文件摘要")
-    alloc_parser.add_argument("--skill-version", help="业务 skill 版本，显式指定时覆盖从 --skill-file 读到的值")
-    commit_parser = commands.add_parser("commit")
-    commit_parser.add_argument("--dir", required=True)
-    commit_parser.add_argument("--primary")
-    commit_parser.add_argument("--status", required=True, choices=FINAL_STATUSES)
-    commit_parser.add_argument("--metrics")
-    finish = commands.add_parser("run-finish")
-    finish.add_argument("--primary")
-    finish.add_argument("--summary")
-    finish.add_argument("--status", default="成功", choices=FINAL_STATUSES)
-    commands.add_parser("status")
-    return p
+    result = JsonArgumentParser(description="产出管家 v2")
+    result.add_argument("--output-root")
+    commands = result.add_subparsers(dest="command", required=True)
+    specs = {
+        "task-begin": ("name",), "flow-check": ("flow",), "flow-update": ("flow", "reason"),
+        "alloc": ("node",), "commit": ("dir", "status"), "adopt": ("node", "version", "reason"),
+        "skip": ("node", "reason"), "handoff": ("node",),
+        "issue-close": ("id", "resolution", "reason"), "status": ()}
+    optional = {
+        "task-begin": ("slug", "goal", "inherit"), "alloc": ("skill", "skill-cn", "skill-file", "skill-version", "baseline", "parent", "external", "override", "force-deps"),
+        "commit": ("primary", "metrics", "verdict", "reason", "to", "confirm", "round"),
+        "status": ("node",),
+        "skip": ("confirm",), "handoff": ("confirm",)}
+    for name, required in specs.items():
+        command = commands.add_parser(name)
+        command.add_argument("--output-root", default=argparse.SUPPRESS)
+        if name not in ("task-begin", "flow-check"):
+            command.add_argument("--task")
+        for field in required + optional.get(name, ()):
+            options = {"required": field in required}
+            if field in ("version", "id"):
+                options["type"] = int
+            if field == "status":
+                options["choices"] = (*ledger.DONE_STATUSES, "失败")
+            if field == "resolution":
+                options["choices"] = ("接受", "已解决", "后续处理")
+            command.add_argument("--" + field, **options)
+        if name == "task-begin":
+            group = command.add_mutually_exclusive_group()
+            group.add_argument("--flow")
+            group.add_argument("--flow-template")
+            command.add_argument("--temp", action="store_true")
+            command.add_argument("--criteria", action="append")
+        if name == "commit":
+            command.add_argument("--issue", action="append", default=[])
+    return result
+
+
+def refresh(root, task, result):
+    for callback in (lambda: views.write_views(state.load_task_state(task)), lambda: views.write_root_index(root)):
+        try:
+            callback()
+        except Exception as error:
+            result.setdefault("warning", []).append(f"视图刷新失败: {error}")
 
 
 def main():
     try:
         args = parser().parse_args()
-        root = resolve_output_root(args.output_root, project_root())
-        handlers = {"task-begin": task_begin, "run-begin": run_begin,
-                    "alloc": alloc, "commit": commit, "run-finish": run_finish,
-                    "status": lambda output_root, _: status(output_root)}
-        result = handlers[args.command](root, args)
+        root = layout.resolve_output_root(args.output_root, layout.project_root())
+        handler = globals()[args.command.replace("-", "_")]
+        if args.command == "flow-check":
+            result, task = handler(root, args)
+        else:
+            with transaction(root):
+                result, task = handler(root, args)
+            refresh(root, task, result)
         print(json.dumps(result, ensure_ascii=False))
-    except (OSError, ValueError, KeyError, TypeError) as error:
+        return 0
+    except Exception as error:
         print(json.dumps({"error": str(error)}, ensure_ascii=False))
-        return 1
-    return 0
+        return 2 if isinstance(error, ArgumentError) else 1
 
 
 if __name__ == "__main__":
